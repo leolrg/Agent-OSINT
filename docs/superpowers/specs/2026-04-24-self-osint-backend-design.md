@@ -91,23 +91,24 @@ The product category is **self-OSINT**: the caller is the subject. Access gating
 
 ### 6.1 Subject input
 
-Pydantic model. `name` required. Every other quantifier optional:
+A single free-form string. Whatever the caller wants to tell the agent about the subject — name, known emails, handles, phone numbers, school, employer, city, past addresses, relationship to known people, "I think I had a Twitter around 2011 but forget the handle" — all in one natural-language blob. Empty or whitespace-only input is rejected.
 
-- `emails: list[str]`
-- `phones: list[str]`
-- `usernames: list[str]`
-- `linkedin_url`, `instagram_url`, `x_handle`, `github_username`, `facebook_url`, `tiktok_handle`
-- `school`, `employer`, `city`, `country`, `dob` (all free-form strings)
-- `notes: str` — free-form extra context the caller wants the agent to have
+```python
+async def scan(subject: str, config: ScanConfig = ..., ...) -> ScanResult
+```
 
-The agent's system prompt receives the subject as a structured block. The more quantifiers the caller provides, the better the agent can disambiguate the right person from search results.
+Rationale: modern LLMs parse identifiers out of natural language reliably, and forcing the caller to map their knowledge into ~15 optional typed fields is friction for no gain. The agent's system prompt instructs Grok to (a) extract identifiers from the subject string into an internal working set, (b) use them to drive tool calls, (c) surface the extracted identifiers in the final report so the caller can confirm nothing was misread.
+
+Callers who already have structured data format it into the string themselves (e.g. `f"Name: {name}\nEmail: {email}\nLinkedIn: {url}"`) — the LLM reads both forms equally well. If a later version wants a structured-input convenience wrapper, it's a thin helper that formats fields into a string and calls `scan()`.
 
 ### 6.2 Agent loop
 
 Pseudocode (real implementation ~50 lines):
 
 ```python
-async def scan(subject, config, llm=None, scans_dir=...):
+async def scan(subject: str, config, llm=None, scans_dir=...):
+    if not subject or not subject.strip():
+        raise ValueError("subject must be a non-empty description")
     llm = llm or GrokLLM(model="grok-4.20")
     tools = [REGISTRY[name] for name in config.enabled_tools]
     state = ScanState(subject=subject, limits=config.limits)
@@ -247,7 +248,8 @@ One JSON file per scan at `{scans_dir}/{scan_id}.json`. Structure:
   "created_at": "ISO8601",
   "completed_at": "ISO8601",
   "status": "done | failed",
-  "subject": { /* Subject model */ },
+  "subject": "free-form natural language description",
+  "extracted_identifiers": { /* the agent's parse of the subject string: emails, handles, etc. */ },
   "config": { /* ScanConfig */ },
   "tool_calls": [
     {
@@ -300,8 +302,6 @@ Paid tools default to *disabled* in `ScanConfig` unless the caller explicitly en
 ```python
 # osint/__init__.py exports:
 
-class Subject(BaseModel): ...
-
 class ScanConfig(BaseModel):
     enabled_tools: set[str] = {"tavily_search", "tavily_extract", "maigret"}
     budget_usd: float = 5.0
@@ -319,14 +319,14 @@ class ScanResult(BaseModel):
     path: Path                  # where the JSON was written
 
 async def scan(
-    subject: Subject,
+    subject: str,                           # free-form natural-language description
     config: ScanConfig = ScanConfig(),
     llm: LLM | None = None,
     scans_dir: Path = Path("./scans"),
 ) -> ScanResult: ...
 ```
 
-A small CLI wrapper (`python -m osint.cli scan --name "..." --school "..."`) is included for manual invocation.
+A small CLI wrapper (`python -m osint.cli scan "Jane Doe, Stuyvesant '08, jane@example.com, @jdoe_nyc"`) is included for manual invocation. Reads from stdin if no argument is passed, so multi-paragraph descriptions pipe in cleanly.
 
 ## 9. Configuration
 
