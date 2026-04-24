@@ -264,6 +264,10 @@ One JSON file per scan at `{scans_dir}/{scan_id}.json`. Structure:
     }
   ],
   "report": { /* final structured report from the LLM */ },
+  "tool_cost_usd": 0.xx,
+  "llm_cost_usd": 0.xx,
+  "llm_input_tokens": 1234,
+  "llm_output_tokens": 567,
   "total_cost_usd": 0.xx,
   "duration_sec": 123
 }
@@ -274,11 +278,29 @@ The `raw` field guarantees nothing is silently dropped even if the LLM's synthes
 ### 6.8 Limits / budget
 
 `ScanConfig` carries three hard caps checked before each tool dispatch:
-- `budget_usd: float` — running sum of `est_cost_usd_per_call` across all calls in this scan.
+- `budget_usd: float` — running sum of **LLM token cost + tool call cost** for this scan. See §6.8.1 for how the two components are computed.
 - `max_tool_calls: int` — absolute cap on tool calls per scan.
 - `max_wall_clock_sec: int` — hard stop on elapsed time.
 
 When any cap is hit mid-scan, the loop stops dispatching new tools, calls the LLM one last time asking for a final synthesis from what it has, and writes the scan record.
+
+#### 6.8.1 Cost accounting
+
+Total scan cost has two sources and both must count against `budget_usd`, otherwise the budget silently under-bounds spend in a ReAct loop that calls the LLM on every turn.
+
+**Tool cost.** Each tool declares an `est_cost_usd_per_call`. The scan's running tool cost is the sum across all dispatched calls (including failed ones — the vendor still charged). For `grok_x_search` this estimate covers the xAI Live Search per-invocation fee only; the underlying LLM tokens are captured by the LLM accounting below.
+
+**LLM cost.** Every ReAct turn makes an LLM call. A LangChain callback captures `input_tokens` and `output_tokens` from each response's `usage_metadata` / `token_usage` block and accumulates them on `ScanState`. The cost is computed from a pricing table on `ScanConfig`:
+
+```python
+class LLMPricing(BaseModel):
+    input_per_mtok_usd: float = 2.0     # grok-4.20 default (2026-04)
+    output_per_mtok_usd: float = 6.0    # grok-4.20 default (2026-04)
+```
+
+These defaults are informed by xAI's public pricing page at the time of writing; callers should override when model or pricing changes. The callback is registered on both the main ReAct agent and the synthesis call, so the budget is enforced end-to-end.
+
+**`total_cost_usd`** on `ScanState` is `tool_cost_usd + llm_cost_usd`. `should_stop()` compares this against `budget_usd`. The per-scan JSON output stores all three components plus the raw token counts so cost breakdowns are auditable.
 
 ### 6.9 Logging
 
@@ -293,7 +315,7 @@ Structured logs via `structlog` to stderr. One log line per: scan start, scan st
 | `maigret` | maigret | free | $0 | Local lib; username → accounts across ~3000 sites |
 | `apify_instagram` | apify | paid | ~$0.02–0.20 | Apify IG profile/posts actor |
 | `apify_linkedin` | apify | paid | ~$0.02–0.10 | Apify LinkedIn profile actor |
-| `grok_x_search` | xai | paid | ~$0.005/source fetched | Grok Live Search scoped to X |
+| `grok_x_search` | xai | paid | ~$0.02/call | Covers ~3–5 Live Search sub-calls @ $2.50–$5.00 per 1k. LLM tokens billed separately (tracked by callback). |
 
 Paid tools default to *disabled* in `ScanConfig` unless the caller explicitly enables them (and the corresponding API key is set in env).
 

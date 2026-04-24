@@ -23,6 +23,7 @@ osint/
 ├── errors.py            # ScanConfigError, ScanStopped
 ├── prompts.py           # build_system_prompt, build_synthesis_prompt, parse_report
 ├── capped_tool.py       # CappedTool wrapper — enforces caps, logs to state
+├── llm_cost.py          # LLMCostCallback — records LLM token usage into ScanState
 ├── log.py               # structlog setup
 ├── scan.py              # scan() using LangGraph's create_react_agent
 ├── cli.py               # argparse CLI
@@ -40,6 +41,7 @@ tests/
 ├── test_state.py
 ├── test_storage.py
 ├── test_capped_tool.py
+├── test_llm_cost.py
 ├── test_tools_tavily.py
 ├── test_tools_maigret.py
 ├── test_tools_apify.py
@@ -147,7 +149,7 @@ git commit -m "chore: scaffold osint package with langgraph deps"
 Create `tests/test_types.py`:
 
 ```python
-from osint.types import ScanConfig
+from osint.types import LLMPricing, ScanConfig
 
 
 def test_scanconfig_defaults():
@@ -158,6 +160,9 @@ def test_scanconfig_defaults():
     assert c.max_wall_clock_sec == 600
     assert c.tool_concurrency == {"maigret": 2}
     assert c.tool_options == {}
+    # grok-4.20 public pricing as of 2026-04 (xAI docs).
+    assert c.llm_pricing.input_per_mtok_usd == 2.0
+    assert c.llm_pricing.output_per_mtok_usd == 6.0
 
 
 def test_scanconfig_rejects_nonpositive_caps():
@@ -176,9 +181,11 @@ def test_scanconfig_overrides():
         enabled_tools={"tavily_search"},
         budget_usd=1.0,
         tool_options={"maigret": {"proxy_url": "http://p:8080"}},
+        llm_pricing=LLMPricing(input_per_mtok_usd=3.0, output_per_mtok_usd=15.0),
     )
     assert c.enabled_tools == {"tavily_search"}
     assert c.tool_options["maigret"]["proxy_url"] == "http://p:8080"
+    assert c.llm_pricing.input_per_mtok_usd == 3.0
 ```
 
 - [ ] **Step 2: Run to confirm failure**
@@ -191,7 +198,7 @@ Expected: `ModuleNotFoundError: No module named 'osint.types'`.
 Create `osint/types.py`:
 
 ```python
-from pydantic import BaseModel, Field, PositiveFloat, PositiveInt
+from pydantic import BaseModel, Field, NonNegativeFloat, PositiveFloat, PositiveInt
 
 
 def default_enabled_tools() -> set[str]:
@@ -202,6 +209,12 @@ def default_tool_concurrency() -> dict[str, int]:
     return {"maigret": 2}
 
 
+class LLMPricing(BaseModel):
+    """Per-million-token pricing used to convert usage_metadata into USD."""
+    input_per_mtok_usd: NonNegativeFloat = 2.0   # grok-4.20 default, 2026-04 per xAI docs
+    output_per_mtok_usd: NonNegativeFloat = 6.0
+
+
 class ScanConfig(BaseModel):
     enabled_tools: set[str] = Field(default_factory=default_enabled_tools)
     budget_usd: PositiveFloat = 5.0
@@ -209,6 +222,7 @@ class ScanConfig(BaseModel):
     max_wall_clock_sec: PositiveInt = 600
     tool_concurrency: dict[str, int] = Field(default_factory=default_tool_concurrency)
     tool_options: dict[str, dict] = Field(default_factory=dict)
+    llm_pricing: LLMPricing = Field(default_factory=LLMPricing)
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
@@ -349,10 +363,25 @@ def test_fresh_state_does_not_stop():
     assert stop is False
 
 
-def test_stops_on_budget():
+def test_stops_on_budget_tool_cost_only():
     s = ScanState(scan_id="x", subject="S", config=ScanConfig(budget_usd=0.05))
     s.record_tool_call(_tc(cost=0.04))
     s.record_tool_call(_tc(cost=0.02))
+    stop, reason = s.should_stop()
+    assert stop is True
+    assert reason == StopReason.BUDGET
+
+
+def test_stops_on_budget_llm_plus_tool_combined():
+    """Budget must count LLM cost together with tool cost, not just tool."""
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig(budget_usd=0.10))
+    s.record_tool_call(_tc(cost=0.06))     # tool_cost = 0.06
+    s.record_llm_usage(input_tokens=20_000, output_tokens=2_000)
+    # default pricing: 20_000 * 2 / 1M + 2_000 * 6 / 1M = 0.04 + 0.012 = 0.052
+    # combined = 0.06 + 0.052 = 0.112 > 0.10
+    assert s.tool_cost_usd == pytest.approx(0.06)
+    assert s.llm_cost_usd == pytest.approx(0.052)
+    assert s.total_cost_usd == pytest.approx(0.112)
     stop, reason = s.should_stop()
     assert stop is True
     assert reason == StopReason.BUDGET
@@ -375,6 +404,14 @@ def test_stops_on_wall_clock():
     assert reason == StopReason.WALL_CLOCK
 
 
+def test_record_llm_usage_accumulates():
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig())
+    s.record_llm_usage(input_tokens=1_000, output_tokens=500)
+    s.record_llm_usage(input_tokens=2_500, output_tokens=750)
+    assert s.llm_input_tokens == 3_500
+    assert s.llm_output_tokens == 1_250
+
+
 def test_final_report_tracking():
     s = ScanState(scan_id="x", subject="S", config=ScanConfig())
     assert s.has_final_report() is False
@@ -382,6 +419,8 @@ def test_final_report_tracking():
     assert s.has_final_report() is True
     assert s.report == {"summary": "hi"}
 ```
+
+Add `import pytest` at the top of `tests/test_state.py`.
 
 - [ ] **Step 2: Run — expect failure**
 
@@ -431,11 +470,25 @@ class ScanState:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     report: dict[str, Any] = field(default_factory=dict)
     extracted_identifiers: dict[str, Any] = field(default_factory=dict)
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
     _has_report: bool = False
 
     @property
-    def total_cost_usd(self) -> float:
+    def tool_cost_usd(self) -> float:
         return sum(tc.cost_usd for tc in self.tool_calls)
+
+    @property
+    def llm_cost_usd(self) -> float:
+        p = self.config.llm_pricing
+        return (
+            self.llm_input_tokens * p.input_per_mtok_usd / 1_000_000
+            + self.llm_output_tokens * p.output_per_mtok_usd / 1_000_000
+        )
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self.tool_cost_usd + self.llm_cost_usd
 
     @property
     def wall_clock_elapsed(self) -> float:
@@ -452,6 +505,10 @@ class ScanState:
 
     def record_tool_call(self, tc: ToolCallRecord) -> None:
         self.tool_calls.append(tc)
+
+    def record_llm_usage(self, *, input_tokens: int, output_tokens: int) -> None:
+        self.llm_input_tokens += max(0, int(input_tokens or 0))
+        self.llm_output_tokens += max(0, int(output_tokens or 0))
 
     def record_final_report(self, report: dict[str, Any], identifiers: dict[str, Any] | None = None) -> None:
         self.report = report
@@ -511,6 +568,7 @@ async def test_write_scan_json(tmp_path: Path):
         input={"q": "x"}, output={"results": []}, raw={"results": []},
         started_at=now, completed_at=now, cost_usd=0.004,
     ))
+    state.record_llm_usage(input_tokens=5_000, output_tokens=1_000)
     state.record_final_report({"summary": "done"}, identifiers={"emails": ["j@e"]})
 
     path = await write_scan_json(tmp_path, state, status="done")
@@ -523,7 +581,12 @@ async def test_write_scan_json(tmp_path: Path):
     assert data["extracted_identifiers"] == {"emails": ["j@e"]}
     assert data["report"] == {"summary": "done"}
     assert data["tool_calls"][0]["tool"] == "tavily_search"
-    assert data["total_cost_usd"] == 0.004
+    assert data["tool_cost_usd"] == 0.004
+    # default pricing: 5_000 * 2 / 1M + 1_000 * 6 / 1M = 0.010 + 0.006 = 0.016
+    assert data["llm_cost_usd"] == 0.016
+    assert data["llm_input_tokens"] == 5_000
+    assert data["llm_output_tokens"] == 1_000
+    assert data["total_cost_usd"] == 0.020
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -567,6 +630,10 @@ async def write_scan_json(
         "config": state.config.model_dump(mode="json"),
         "tool_calls": [tc.model_dump(mode="json") for tc in state.tool_calls],
         "report": state.report,
+        "tool_cost_usd": state.tool_cost_usd,
+        "llm_cost_usd": state.llm_cost_usd,
+        "llm_input_tokens": state.llm_input_tokens,
+        "llm_output_tokens": state.llm_output_tokens,
         "total_cost_usd": state.total_cost_usd,
         "duration_sec": state.wall_clock_elapsed,
     }
@@ -1653,7 +1720,12 @@ _COSTS = {
     "maigret": 0.0,
     "apify_instagram": 0.15,
     "apify_linkedin": 0.05,
-    "grok_x_search": 0.05,
+    # grok_x_search est covers the xAI Live Search per-invocation fee only
+    # (~$2.50–$5.00 per 1k calls × ~3–5 search sub-calls per tool invocation).
+    # The LLM token cost of the sub-call is captured separately by
+    # LLMCostCallback when the tool's inner ChatOpenAI runs with that callback
+    # registered.
+    "grok_x_search": 0.02,
 }
 
 
@@ -1748,6 +1820,130 @@ Expected: one structured line on stderr including `event=hi x=1`.
 ```bash
 git add osint/log.py
 git commit -m "chore(log): add structlog setup"
+```
+
+---
+
+## Task 13.5: `LLMCostCallback` — capture token usage from every LLM call
+
+**Files:**
+- Create: `osint/llm_cost.py`
+- Create: `tests/test_llm_cost.py`
+
+LangChain callbacks fire on every LLM call (inside the ReAct agent *and* inside our synthesis call *and* inside `GrokXSearchTool`'s inner call if we pass the callback into it). The callback parses the response's usage metadata — available at `LLMResult.llm_output["token_usage"]` (OpenAI-style) and/or on `AIMessage.usage_metadata` (LangChain-standardized) — and accumulates counts on `ScanState`.
+
+- [ ] **Step 1: Write failing tests**
+
+Create `tests/test_llm_cost.py`:
+
+```python
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
+
+from osint.llm_cost import LLMCostCallback
+from osint.state import ScanState
+from osint.types import ScanConfig
+
+
+def _llm_result_with_token_usage(prompt: int, completion: int) -> LLMResult:
+    ai = AIMessage(content="ok")
+    gen = ChatGeneration(message=ai)
+    return LLMResult(
+        generations=[[gen]],
+        llm_output={"token_usage": {"prompt_tokens": prompt, "completion_tokens": completion}},
+    )
+
+
+def _llm_result_with_usage_metadata(inp: int, out: int) -> LLMResult:
+    ai = AIMessage(content="ok",
+                   usage_metadata={"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out})
+    gen = ChatGeneration(message=ai)
+    return LLMResult(generations=[[gen]])
+
+
+async def test_callback_picks_up_openai_style_token_usage():
+    state = ScanState(scan_id="x", subject="S", config=ScanConfig())
+    cb = LLMCostCallback(state)
+    await cb.on_llm_end(_llm_result_with_token_usage(prompt=1_000, completion=500))
+    assert state.llm_input_tokens == 1_000
+    assert state.llm_output_tokens == 500
+
+
+async def test_callback_picks_up_usage_metadata_fallback():
+    state = ScanState(scan_id="x", subject="S", config=ScanConfig())
+    cb = LLMCostCallback(state)
+    await cb.on_llm_end(_llm_result_with_usage_metadata(inp=2_000, out=250))
+    assert state.llm_input_tokens == 2_000
+    assert state.llm_output_tokens == 250
+
+
+async def test_callback_is_silent_when_usage_is_missing():
+    state = ScanState(scan_id="x", subject="S", config=ScanConfig())
+    cb = LLMCostCallback(state)
+    await cb.on_llm_end(LLMResult(generations=[[ChatGeneration(message=AIMessage(content="ok"))]]))
+    assert state.llm_input_tokens == 0
+    assert state.llm_output_tokens == 0
+```
+
+- [ ] **Step 2: Run — expect failure**
+
+Run: `pytest tests/test_llm_cost.py -v`
+Expected: `ImportError`.
+
+- [ ] **Step 3: Implement `osint/llm_cost.py`**
+
+```python
+from typing import Any
+
+from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.outputs import LLMResult
+
+from osint.state import ScanState
+
+
+class LLMCostCallback(AsyncCallbackHandler):
+    """Accumulate LLM token usage into a ScanState.
+
+    Tries two places for token counts, in order:
+    1. `response.llm_output["token_usage"]` — the OpenAI/xAI-compatible shape.
+    2. Per-generation `message.usage_metadata` — the LangChain-standardized shape.
+    """
+
+    def __init__(self, state: ScanState):
+        self.state = state
+
+    async def on_llm_end(self, response: LLMResult, **_: Any) -> None:
+        usage = (response.llm_output or {}).get("token_usage") or {}
+        prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+
+        if not prompt and not completion:
+            # Fall back to per-generation usage_metadata on the AIMessage.
+            for gens in response.generations:
+                for gen in gens:
+                    msg = getattr(gen, "message", None)
+                    meta = getattr(msg, "usage_metadata", None) if msg is not None else None
+                    if meta:
+                        prompt += meta.get("input_tokens", 0) or 0
+                        completion += meta.get("output_tokens", 0) or 0
+
+        if prompt or completion:
+            self.state.record_llm_usage(
+                input_tokens=int(prompt or 0),
+                output_tokens=int(completion or 0),
+            )
+```
+
+- [ ] **Step 4: Run tests — expect pass**
+
+Run: `pytest tests/test_llm_cost.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add osint/llm_cost.py tests/test_llm_cost.py
+git commit -m "feat(llm_cost): add LangChain callback that records token usage to ScanState"
 ```
 
 ---
@@ -1914,6 +2110,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
 
 from osint.errors import ScanConfigError, ScanStopped
+from osint.llm_cost import LLMCostCallback
 from osint.log import configure_logging, logger
 from osint.prompts import build_synthesis_prompt, build_system_prompt, parse_report
 from osint.state import ScanState, StopReason
@@ -1933,12 +2130,18 @@ def _default_llm() -> ChatOpenAI:
     )
 
 
-async def _synthesize(llm: BaseChatModel, subject: str, state: ScanState, stop_reason: str) -> str:
+async def _synthesize(
+    llm: BaseChatModel,
+    subject: str,
+    state: ScanState,
+    stop_reason: str,
+    cost_cb: LLMCostCallback,
+) -> str:
     msgs = [
         SystemMessage(content=build_system_prompt(subject, sorted(state.config.enabled_tools))),
         HumanMessage(content=build_synthesis_prompt(stop_reason)),
     ]
-    result = await llm.ainvoke(msgs)
+    result = await llm.ainvoke(msgs, config={"callbacks": [cost_cb]})
     return result.content or ""
 
 
@@ -1976,8 +2179,12 @@ async def scan(
             ),
         )
 
+        cost_cb = LLMCostCallback(state)
         initial_state = {"messages": [HumanMessage(content="Begin the scan.")]}
-        invoke_config: dict[str, Any] = {"recursion_limit": 2 * config.max_tool_calls}
+        invoke_config: dict[str, Any] = {
+            "recursion_limit": 2 * config.max_tool_calls,
+            "callbacks": [cost_cb],
+        }
 
         stop_reason: StopReason | None = None
         agent_result: dict | None = None
@@ -2001,16 +2208,23 @@ async def scan(
             logger.info("scan.synthesize", scan_id=state.scan_id,
                         stop_reason=stop_reason.value if stop_reason else "unknown")
             synth_text = await _synthesize(
-                llm, subject, state, stop_reason.value if stop_reason else "unknown",
+                llm, subject, state, stop_reason.value if stop_reason else "unknown", cost_cb,
             )
             parsed = parse_report(synth_text)
             state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
 
         path = await write_scan_json(scans_dir, state, status="done")
-        logger.info("scan.done", scan_id=state.scan_id,
-                    tool_calls=len(state.tool_calls),
-                    cost_usd=state.total_cost_usd,
-                    duration_sec=state.wall_clock_elapsed)
+        logger.info(
+            "scan.done",
+            scan_id=state.scan_id,
+            tool_calls=len(state.tool_calls),
+            tool_cost_usd=state.tool_cost_usd,
+            llm_cost_usd=state.llm_cost_usd,
+            total_cost_usd=state.total_cost_usd,
+            llm_input_tokens=state.llm_input_tokens,
+            llm_output_tokens=state.llm_output_tokens,
+            duration_sec=state.wall_clock_elapsed,
+        )
         return ScanResult(
             scan_id=state.scan_id,
             subject=subject,
@@ -2206,7 +2420,7 @@ git commit -m "feat(cli): add argparse CLI and finalize public exports"
 - §6.5 `grok_x_search` separate tool with X-scoped Live Search: ✓ Task 9.
 - §6.6 Maigret mitigations (internal max_connections=15, process semaphore, proxy_url, sites_filter): ✓ Task 7.
 - §6.7 JSON output shape with `extracted_identifiers` and raw tool calls: ✓ Tasks 5, 14.
-- §6.8 cap enforcement + final synthesis: ✓ Task 14.
+- §6.8 cap enforcement + final synthesis + LLM-plus-tool cost accounting (§6.8.1): ✓ Tasks 2 (LLMPricing), 4 (combined `total_cost_usd`), 5 (JSON cost breakdown), 13.5 (`LLMCostCallback`), 14 (callback wired into both agent invocation and synthesis call). The `grok_x_search` entry in `_COSTS` is explicitly scoped to the Live Search fee only so token cost is not double-counted.
 - §6.9 structlog logging with scan_id, no subject PII: ✓ Task 13 + Task 14 (explicit fields on every log call are scan_id/duration/cost/call count).
 - §7 v1 tool list: ✓ all six.
 - §8 public API including `python -m osint.cli`: ✓ Task 15.
