@@ -213,20 +213,51 @@ class GrokXSearchTool(Tool):
 
 ### 6.6 Rate limiting
 
-**v1 (process-wide):** a dict of `asyncio.Semaphore`s keyed by vendor, initialized from config:
+Two distinct concerns, handled separately.
+
+#### 6.6.1 Vendor-account quotas
+
+Each paid API imposes limits on our account (concurrent jobs, RPM, monthly spend). Concurrent scans sharing our credentials can saturate these. Handled with a process-wide `asyncio.Semaphore` per vendor:
 
 ```python
 VENDOR_LIMITS = {
-    "tavily": Semaphore(5),
-    "apify": Semaphore(3),
-    "xai": Semaphore(4),
-    "maigret": Semaphore(2),   # polite limit on target-site fanout
+    "tavily": asyncio.Semaphore(5),
+    "apify":  asyncio.Semaphore(3),
+    "xai":    asyncio.Semaphore(4),
 }
 ```
 
-`invoke_tool` acquires `VENDOR_LIMITS[tool.vendor]` around the actual call. Defaults are conservative; all tunable via the `ScanConfig`.
+`invoke_tool` acquires `VENDOR_LIMITS[tool.vendor]` around the actual API call (acquire → call → release; the agent loop is not held inside the semaphore). All sizes tunable via `ScanConfig.vendor_concurrency`.
 
-**Forward compatibility with multi-user web app:** a later HTTP layer introduces a `RateLimiter` interface with two implementations: `InProcessLimiter` (v1's semaphore dict) and `RedisTokenBucketLimiter` (per-user quotas). Tool code calls `ctx.rate_limiter.acquire(vendor, user_id)`. For v1 we thread `user_id=None` through — no code change needed when multi-user lands.
+These limits are *account-level, vendor-enforced*. They do **not** solve target-site rate-limiting — that is a separate problem (§6.6.2).
+
+#### 6.6.2 Target-site rate limits (direct-scraping tools)
+
+Some tools do not route through a third-party vendor — they make outbound HTTP requests from our server's IP directly to many target sites. If we fan out aggressively (either within a single scan or across many concurrent scans in a future web app), the target sites will 429 us, captcha us, or IP-ban us.
+
+**Which v1 tools hit target sites directly:** `maigret` only. Every other v1 tool goes through a vendor (Tavily, Apify, xAI) whose own proxy/IP infrastructure handles target-site discipline.
+
+**Mitigations, stacked:**
+
+1. **Internal throttle inside the tool.** `maigret` is invoked with a conservative concurrency cap (default `max_connections=15`), short per-site timeout, and one retry. Exposed in the tool's input schema so the agent can be even more conservative on demand.
+
+2. **Per-tool semaphore bounding how many invocations run concurrently on the box.** Distinct from the vendor semaphores:
+   ```python
+   TOOL_LIMITS = {
+       "maigret": asyncio.Semaphore(2),   # at most 2 Maigret runs in flight process-wide
+   }
+   ```
+   This is the cap that matters in a multi-user deployment — no matter how many scans are running, only N Maigret fanouts happen at once from our IP.
+
+3. **Proxy support (config knob now, active in prod).** `MaigretTool` accepts a `proxy_url: str | None` in `ScanConfig.tool_options["maigret"]`, defaulting to `None` in v1 (single-user dev). In the future web app this is populated with a rotating-proxy provider (Bright Data / ScraperAPI / similar), which is the actual fix for scale. Wiring the knob now means no interface change later.
+
+4. **Site-list filter.** `MaigretTool` also accepts `sites_filter: list[str] | None` in its input schema — when populated, restricts checks to a subset instead of all ~3000 sites. Unused in v1 default but available for the agent to use when a narrow check is better than a fanout.
+
+The general rule for adding any future tool that hits target sites directly (e.g. `holehe`, self-hosted Playwright scrapers): the tool must declare itself as direct-scraping, get a `TOOL_LIMITS` entry, accept a `proxy_url` knob, and document its default internal concurrency.
+
+#### 6.6.3 Forward compatibility with multi-user web app
+
+A later HTTP layer introduces a `RateLimiter` interface with two implementations: `InProcessLimiter` (v1's semaphore dicts) and `RedisTokenBucketLimiter` (per-user quotas layered on top of the vendor and tool caps). Tool code calls `ctx.rate_limiter.acquire(scope, user_id)` where `scope` is `vendor:tavily`, `tool:maigret`, etc. For v1 we thread `user_id=None` through — no code change needed when multi-user lands.
 
 ### 6.7 Storage
 
