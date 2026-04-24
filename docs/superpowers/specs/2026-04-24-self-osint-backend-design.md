@@ -213,51 +213,29 @@ class GrokXSearchTool(Tool):
 
 ### 6.6 Rate limiting
 
-Two distinct concerns, handled separately.
+Scope: target-site rate limits only. Vendor-side quotas (Tavily / Apify / xAI) are handled by accepting 429 responses and backing off — no client-side semaphores for vendor traffic.
 
-#### 6.6.1 Vendor-account quotas
+The concern: some tools make outbound HTTP requests from our server's IP *directly to many target sites*. If we fan out aggressively (either within a single scan or across many concurrent scans in the future web app), those target sites will 429 us, captcha us, or IP-ban us.
 
-Each paid API imposes limits on our account (concurrent jobs, RPM, monthly spend). Concurrent scans sharing our credentials can saturate these. Handled with a process-wide `asyncio.Semaphore` per vendor:
+**Which v1 tools hit target sites directly:** `maigret` only. Every other v1 tool goes through a vendor (Tavily, Apify, xAI) whose own proxy/IP infrastructure absorbs the target-site pressure.
 
-```python
-VENDOR_LIMITS = {
-    "tavily": asyncio.Semaphore(5),
-    "apify":  asyncio.Semaphore(3),
-    "xai":    asyncio.Semaphore(4),
-}
-```
+**Mitigations, stacked, specifically for `maigret`:**
 
-`invoke_tool` acquires `VENDOR_LIMITS[tool.vendor]` around the actual API call (acquire → call → release; the agent loop is not held inside the semaphore). All sizes tunable via `ScanConfig.vendor_concurrency`.
+1. **Internal throttle inside the tool.** Maigret is invoked with a conservative concurrency cap (default `max_connections=15`), short per-site timeout, and one retry. The agent can override to be even more conservative via the tool's input schema.
 
-These limits are *account-level, vendor-enforced*. They do **not** solve target-site rate-limiting — that is a separate problem (§6.6.2).
-
-#### 6.6.2 Target-site rate limits (direct-scraping tools)
-
-Some tools do not route through a third-party vendor — they make outbound HTTP requests from our server's IP directly to many target sites. If we fan out aggressively (either within a single scan or across many concurrent scans in a future web app), the target sites will 429 us, captcha us, or IP-ban us.
-
-**Which v1 tools hit target sites directly:** `maigret` only. Every other v1 tool goes through a vendor (Tavily, Apify, xAI) whose own proxy/IP infrastructure handles target-site discipline.
-
-**Mitigations, stacked:**
-
-1. **Internal throttle inside the tool.** `maigret` is invoked with a conservative concurrency cap (default `max_connections=15`), short per-site timeout, and one retry. Exposed in the tool's input schema so the agent can be even more conservative on demand.
-
-2. **Per-tool semaphore bounding how many invocations run concurrently on the box.** Distinct from the vendor semaphores:
+2. **Process-wide cap on concurrent invocations.** A dedicated `asyncio.Semaphore` — not for vendor quota, purely for target-site politeness:
    ```python
    TOOL_LIMITS = {
-       "maigret": asyncio.Semaphore(2),   # at most 2 Maigret runs in flight process-wide
+       "maigret": asyncio.Semaphore(2),   # at most 2 Maigret runs in flight
    }
    ```
-   This is the cap that matters in a multi-user deployment — no matter how many scans are running, only N Maigret fanouts happen at once from our IP.
+   This is the cap that matters in a multi-user deployment: no matter how many scans are running, only N Maigret fanouts happen from our IP at once.
 
-3. **Proxy support (config knob now, active in prod).** `MaigretTool` accepts a `proxy_url: str | None` in `ScanConfig.tool_options["maigret"]`, defaulting to `None` in v1 (single-user dev). In the future web app this is populated with a rotating-proxy provider (Bright Data / ScraperAPI / similar), which is the actual fix for scale. Wiring the knob now means no interface change later.
+3. **Proxy support (config knob now, active in prod).** `MaigretTool` accepts a `proxy_url: str | None` in `ScanConfig.tool_options["maigret"]`, defaulting to `None` for dev. In production this is populated with a rotating-proxy provider (Bright Data / ScraperAPI / similar), which is the real fix for scale. Wiring the knob now means no interface change later.
 
-4. **Site-list filter.** `MaigretTool` also accepts `sites_filter: list[str] | None` in its input schema — when populated, restricts checks to a subset instead of all ~3000 sites. Unused in v1 default but available for the agent to use when a narrow check is better than a fanout.
+4. **Site-list filter.** `MaigretTool` accepts `sites_filter: list[str] | None` in its input schema — when populated, restricts checks to a subset rather than all ~3000 sites. Unused by default; available for the agent to request a narrow check when a full fanout is overkill.
 
-The general rule for adding any future tool that hits target sites directly (e.g. `holehe`, self-hosted Playwright scrapers): the tool must declare itself as direct-scraping, get a `TOOL_LIMITS` entry, accept a `proxy_url` knob, and document its default internal concurrency.
-
-#### 6.6.3 Forward compatibility with multi-user web app
-
-A later HTTP layer introduces a `RateLimiter` interface with two implementations: `InProcessLimiter` (v1's semaphore dicts) and `RedisTokenBucketLimiter` (per-user quotas layered on top of the vendor and tool caps). Tool code calls `ctx.rate_limiter.acquire(scope, user_id)` where `scope` is `vendor:tavily`, `tool:maigret`, etc. For v1 we thread `user_id=None` through — no code change needed when multi-user lands.
+**Rule for future tools that scrape directly** (e.g. if we later add `holehe`, or self-hosted Playwright scrapers): the tool declares itself direct-scraping, gets a `TOOL_LIMITS` entry, accepts a `proxy_url` knob, and documents its default internal concurrency. Tools that route through a vendor don't need any of this.
 
 ### 6.7 Storage
 
@@ -329,7 +307,8 @@ class ScanConfig(BaseModel):
     budget_usd: float = 5.0
     max_tool_calls: int = 30
     max_wall_clock_sec: int = 600
-    vendor_concurrency: dict[str, int] = Field(default_factory=default_vendor_concurrency)
+    tool_concurrency: dict[str, int] = Field(default_factory=default_tool_concurrency)
+    tool_options: dict[str, dict] = Field(default_factory=dict)   # e.g. {"maigret": {"proxy_url": ...}}
 
 class ScanResult(BaseModel):
     scan_id: str
