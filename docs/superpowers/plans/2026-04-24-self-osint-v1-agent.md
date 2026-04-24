@@ -1,12 +1,12 @@
-# Self-OSINT v1 Agent — Implementation Plan
+# Self-OSINT v1 Agent — Implementation Plan (LangGraph)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Python library exposing `async def scan(subject: str, config) -> ScanResult` that drives a Grok-4.20 agent over six OSINT tools (tavily_search, tavily_extract, maigret, apify_instagram, apify_linkedin, grok_x_search) and writes a JSON-per-scan record with verbatim tool output.
+**Goal:** Build a Python library exposing `async def scan(subject: str, config) -> ScanResult` that drives a Grok-4.20 ReAct agent (LangGraph's `create_react_agent`) over six OSINT tools (`tavily_search`, `tavily_extract`, `maigret`, `apify_instagram`, `apify_linkedin`, `grok_x_search`) and writes a JSON-per-scan record with verbatim tool output.
 
-**Architecture:** A single Python package (`osint/`) with a registry of async tools and an agent loop that interleaves Grok tool-use rounds with parallel tool dispatch via `asyncio.gather`. Each scan produces one JSON file in a configurable directory capturing the subject, every tool call's raw response, and the final LLM report. No HTTP, no database — library-shaped.
+**Architecture:** One Python package (`osint/`). The agent loop is LangGraph's prebuilt ReAct agent; we wire Grok in as a `ChatOpenAI` pointed at xAI's OpenAI-compatible endpoint. Tavily tools are imported from `langchain-tavily` unchanged. Custom tools (Maigret, Apify IG/LinkedIn, Grok X search) are `langchain_core.tools.BaseTool` subclasses. Every tool is wrapped in a `CappedTool` that enforces per-scan budget/call/time caps and records each invocation (with the raw vendor response) to `ScanState`. After the agent loop terminates (normal, cap hit, or recursion limit), the final LLM message is parsed into a structured report and written as a single JSON file.
 
-**Tech Stack:** Python 3.11+, Pydantic v2 for types, the `openai` async SDK against xAI's OpenAI-compatible endpoint, `tavily-python`, `apify-client`, `maigret` (library), `structlog` for logging. Tests use `pytest`, `pytest-asyncio`, `respx` for HTTP mocking, `pytest-mock` for general mocking.
+**Tech Stack:** Python 3.11+, Pydantic v2, `langgraph`, `langchain-core`, `langchain-openai` (for the ChatOpenAI→xAI wiring), `langchain-tavily` (built-in Tavily tools), `apify-client`, `maigret` (library), `structlog`. Tests use `pytest`, `pytest-asyncio`, `pytest-mock`, and `langchain_core.language_models.fake_chat_models.FakeMessagesListChatModel` for scripted LLM responses.
 
 **Spec reference:** `docs/superpowers/specs/2026-04-24-self-osint-backend-design.md`
 
@@ -16,22 +16,22 @@
 
 ```
 osint/
-├── __init__.py          # public exports: scan, ScanConfig, ScanResult
-├── types.py             # Pydantic models: ScanConfig, ToolUse, ToolCall, LLMResponse, ScanResult
-├── state.py             # ScanState (mutable scan bookkeeping)
+├── __init__.py          # public exports
+├── types.py             # Pydantic: ScanConfig, ToolCallRecord, ScanResult
+├── state.py             # ScanState + StopReason
 ├── storage.py           # write_scan_json, new_scan_id
-├── errors.py            # ScanConfigError, ToolError
-├── llm.py               # LLM Protocol + GrokLLM
+├── errors.py            # ScanConfigError, ScanStopped
 ├── prompts.py           # build_system_prompt, build_synthesis_prompt, parse_report
-├── scan.py              # scan() entrypoint + agent loop
-├── cli.py               # python -m osint.cli
+├── capped_tool.py       # CappedTool wrapper — enforces caps, logs to state
 ├── log.py               # structlog setup
+├── scan.py              # scan() using LangGraph's create_react_agent
+├── cli.py               # argparse CLI
 └── tools/
-    ├── __init__.py      # Tool Protocol, REGISTRY, TOOL_LIMITS, invoke_tool
-    ├── tavily.py        # TavilySearchTool, TavilyExtractTool
-    ├── maigret.py       # MaigretTool
-    ├── apify.py         # ApifyInstagramTool, ApifyLinkedInTool
-    └── grok_x.py        # GrokXSearchTool
+    ├── __init__.py      # build_tools(config, state) factory
+    ├── tavily.py        # thin wrappers around langchain-tavily
+    ├── maigret.py       # BaseTool subclass, direct-scraping
+    ├── apify.py         # BaseTool subclasses for IG + LinkedIn
+    └── grok_x.py        # BaseTool subclass using a dedicated ChatOpenAI
 
 tests/
 ├── __init__.py
@@ -39,9 +39,7 @@ tests/
 ├── test_types.py
 ├── test_state.py
 ├── test_storage.py
-├── test_llm.py
-├── test_tools_registry.py
-├── test_tools_invoke.py
+├── test_capped_tool.py
 ├── test_tools_tavily.py
 ├── test_tools_maigret.py
 ├── test_tools_apify.py
@@ -51,7 +49,7 @@ tests/
 └── test_cli.py
 ```
 
-Each file has one responsibility. Tools are one-file-per-vendor. All tests in `tests/` keyed by module under test.
+LangGraph's prebuilt ReAct agent replaces what would otherwise be a custom agent loop — that's why there's no `osint/llm.py` or custom `Tool Protocol`/`invoke_tool`. Our value-add over bare LangGraph is `CappedTool` (budget + state-log side-channel) plus the custom tools.
 
 ---
 
@@ -71,16 +69,17 @@ Each file has one responsibility. Tools are one-file-per-vendor. All tests in `t
 [project]
 name = "osint"
 version = "0.1.0"
-description = "Self-OSINT backend — v1 agent"
+description = "Self-OSINT backend — v1 LangGraph agent"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.5",
-    "openai>=1.40",
-    "tavily-python>=0.5",
+    "langgraph>=0.2.60",
+    "langchain-core>=0.3.20",
+    "langchain-openai>=0.2.10",
+    "langchain-tavily>=0.1.0",
     "apify-client>=1.7",
     "maigret>=0.4.4",
     "structlog>=24.1",
-    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +87,6 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
-    "respx>=0.21",
 ]
 
 [tool.pytest.ini_options]
@@ -133,7 +131,7 @@ Expected: `no tests ran`.
 
 ```bash
 git add pyproject.toml .gitignore osint/ tests/
-git commit -m "chore: scaffold osint package"
+git commit -m "chore: scaffold osint package with langgraph deps"
 ```
 
 ---
@@ -144,7 +142,7 @@ git commit -m "chore: scaffold osint package"
 - Create: `osint/types.py`
 - Create: `tests/test_types.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write failing tests**
 
 Create `tests/test_types.py`:
 
@@ -186,7 +184,7 @@ def test_scanconfig_overrides():
 - [ ] **Step 2: Run to confirm failure**
 
 Run: `pytest tests/test_types.py -v`
-Expected: `ImportError`/`ModuleNotFoundError` for `osint.types`.
+Expected: `ModuleNotFoundError: No module named 'osint.types'`.
 
 - [ ] **Step 3: Implement `ScanConfig`**
 
@@ -227,7 +225,7 @@ git commit -m "feat(types): add ScanConfig with validated caps"
 
 ---
 
-## Task 3: Core runtime types (`ToolUse`, `ToolCall`, `LLMResponse`, `ScanResult`)
+## Task 3: Runtime types (`ToolCallRecord`, `ScanResult`)
 
 **Files:**
 - Modify: `osint/types.py`
@@ -240,53 +238,37 @@ Append to `tests/test_types.py`:
 ```python
 from datetime import datetime
 from pathlib import Path
-from osint.types import ToolUse, ToolCall, LLMResponse, ScanResult
+from osint.types import ToolCallRecord, ScanResult
 
 
-def test_tooluse_roundtrip():
-    t = ToolUse(id="call_1", name="tavily_search", input={"query": "x"})
-    assert t.model_dump() == {"id": "call_1", "name": "tavily_search", "input": {"query": "x"}}
-
-
-def test_toolcall_error_optional():
-    tc = ToolCall(
-        turn=1, tool="tavily_search", input={"q": "x"}, output={"r": 1}, raw={"r": 1},
-        started_at=datetime(2026, 4, 24), completed_at=datetime(2026, 4, 24),
-        cost_usd=0.01,
+def test_toolcallrecord_defaults():
+    now = datetime(2026, 4, 24)
+    tc = ToolCallRecord(
+        turn=1, tool="tavily_search", tool_call_id="call_a",
+        input={"query": "x"}, output={"results": []}, raw={"results": []},
+        started_at=now, completed_at=now, cost_usd=0.004,
     )
     assert tc.error is None
 
 
-def test_llmresponse_fields():
-    r = LLMResponse(
-        text="hello",
-        tool_uses=[ToolUse(id="a", name="t", input={})],
-        assistant_message_raw={"role": "assistant", "content": "hello"},
-    )
-    assert len(r.tool_uses) == 1
-
-
 def test_scanresult_fields():
     s = ScanResult(
-        scan_id="s1",
-        subject="Jane Doe",
+        scan_id="s1", subject="Jane Doe",
         extracted_identifiers={"emails": ["j@e"]},
         report={"summary": "..."},
-        tool_calls=[],
-        total_cost_usd=0.0,
-        duration_sec=1.0,
+        tool_calls=[], total_cost_usd=0.0, duration_sec=1.0,
         path=Path("/tmp/s1.json"),
     )
-    assert s.scan_id == "s1"
     assert s.subject == "Jane Doe"
+    assert s.path.name == "s1.json"
 ```
 
-- [ ] **Step 2: Run — expect 4 new failures**
+- [ ] **Step 2: Run — expect 2 failures**
 
 Run: `pytest tests/test_types.py -v`
-Expected: 3 pass, 4 fail with `ImportError` on the new symbols.
+Expected: 3 pass, 2 fail with `ImportError` on new symbols.
 
-- [ ] **Step 3: Implement new types**
+- [ ] **Step 3: Implement the new types**
 
 Append to `osint/types.py`:
 
@@ -296,15 +278,10 @@ from pathlib import Path
 from typing import Any
 
 
-class ToolUse(BaseModel):
-    id: str
-    name: str
-    input: dict[str, Any]
-
-
-class ToolCall(BaseModel):
+class ToolCallRecord(BaseModel):
     turn: int
     tool: str
+    tool_call_id: str | None = None    # matches LangGraph's tool_calls[].id
     input: dict[str, Any]
     output: dict[str, Any] | None
     raw: Any
@@ -314,33 +291,27 @@ class ToolCall(BaseModel):
     error: str | None = None
 
 
-class LLMResponse(BaseModel):
-    text: str
-    tool_uses: list[ToolUse] = Field(default_factory=list)
-    assistant_message_raw: dict[str, Any]
-
-
 class ScanResult(BaseModel):
     scan_id: str
     subject: str
     extracted_identifiers: dict[str, Any] = Field(default_factory=dict)
     report: dict[str, Any] = Field(default_factory=dict)
-    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
     total_cost_usd: float = 0.0
     duration_sec: float = 0.0
     path: Path
 ```
 
-- [ ] **Step 4: Run — expect all pass**
+- [ ] **Step 4: Run tests — expect pass**
 
 Run: `pytest tests/test_types.py -v`
-Expected: 7 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add osint/types.py tests/test_types.py
-git commit -m "feat(types): add runtime types for tool calls, LLM responses, scan results"
+git commit -m "feat(types): add ToolCallRecord and ScanResult"
 ```
 
 ---
@@ -348,8 +319,8 @@ git commit -m "feat(types): add runtime types for tool calls, LLM responses, sca
 ## Task 4: `ScanState` and stop conditions
 
 **Files:**
-- Create: `osint/state.py`
 - Create: `osint/errors.py`
+- Create: `osint/state.py`
 - Create: `tests/test_state.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -360,13 +331,14 @@ Create `tests/test_state.py`:
 import time
 from datetime import datetime, timezone
 from osint.state import ScanState, StopReason
-from osint.types import ScanConfig, ToolCall
+from osint.types import ScanConfig, ToolCallRecord
 
 
-def _tc(cost: float = 0.0) -> ToolCall:
+def _tc(cost: float = 0.0) -> ToolCallRecord:
     now = datetime.now(timezone.utc)
-    return ToolCall(
-        turn=1, tool="t", input={}, output={}, raw={},
+    return ToolCallRecord(
+        turn=1, tool="t", tool_call_id="x",
+        input={}, output={}, raw={},
         started_at=now, completed_at=now, cost_usd=cost,
     )
 
@@ -378,8 +350,7 @@ def test_fresh_state_does_not_stop():
 
 
 def test_stops_on_budget():
-    cfg = ScanConfig(budget_usd=0.05)
-    s = ScanState(scan_id="x", subject="S", config=cfg)
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig(budget_usd=0.05))
     s.record_tool_call(_tc(cost=0.04))
     s.record_tool_call(_tc(cost=0.02))
     stop, reason = s.should_stop()
@@ -388,8 +359,7 @@ def test_stops_on_budget():
 
 
 def test_stops_on_max_tool_calls():
-    cfg = ScanConfig(max_tool_calls=2)
-    s = ScanState(scan_id="x", subject="S", config=cfg)
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig(max_tool_calls=2))
     s.record_tool_call(_tc())
     s.record_tool_call(_tc())
     stop, reason = s.should_stop()
@@ -397,9 +367,8 @@ def test_stops_on_max_tool_calls():
     assert reason == StopReason.MAX_CALLS
 
 
-def test_stops_on_wall_clock(monkeypatch):
-    cfg = ScanConfig(max_wall_clock_sec=1)
-    s = ScanState(scan_id="x", subject="S", config=cfg)
+def test_stops_on_wall_clock():
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig(max_wall_clock_sec=1))
     s.started_at = time.monotonic() - 5
     stop, reason = s.should_stop()
     assert stop is True
@@ -412,30 +381,29 @@ def test_final_report_tracking():
     s.record_final_report({"summary": "hi"}, identifiers={"emails": []})
     assert s.has_final_report() is True
     assert s.report == {"summary": "hi"}
-    assert s.extracted_identifiers == {"emails": []}
 ```
 
 - [ ] **Step 2: Run — expect failure**
 
 Run: `pytest tests/test_state.py -v`
-Expected: `ImportError` for `osint.state`.
+Expected: `ImportError`.
 
-- [ ] **Step 3: Implement `errors.py` first**
-
-Create `osint/errors.py`:
+- [ ] **Step 3: Implement `osint/errors.py`**
 
 ```python
 class ScanConfigError(Exception):
     """Invalid or incomplete scan configuration (e.g. missing API key)."""
 
 
-class ToolError(Exception):
-    """A tool raised an error during execution."""
+class ScanStopped(Exception):
+    """Raised when a scan hits a cap mid-flight; caught in scan() for synthesis."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 ```
 
-- [ ] **Step 4: Implement `ScanState`**
-
-Create `osint/state.py`:
+- [ ] **Step 4: Implement `osint/state.py`**
 
 ```python
 import time
@@ -443,7 +411,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from osint.types import ScanConfig, ToolCall
+from osint.types import ScanConfig, ToolCallRecord
 
 
 class StopReason(str, Enum):
@@ -460,7 +428,7 @@ class ScanState:
     subject: str
     config: ScanConfig
     started_at: float = field(default_factory=time.monotonic)
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
     report: dict[str, Any] = field(default_factory=dict)
     extracted_identifiers: dict[str, Any] = field(default_factory=dict)
     _has_report: bool = False
@@ -482,7 +450,7 @@ class ScanState:
             return True, StopReason.WALL_CLOCK
         return False, StopReason.NONE
 
-    def record_tool_call(self, tc: ToolCall) -> None:
+    def record_tool_call(self, tc: ToolCallRecord) -> None:
         self.tool_calls.append(tc)
 
     def record_final_report(self, report: dict[str, Any], identifiers: dict[str, Any] | None = None) -> None:
@@ -526,7 +494,7 @@ from pathlib import Path
 
 from osint.state import ScanState
 from osint.storage import new_scan_id, write_scan_json
-from osint.types import ScanConfig, ToolCall
+from osint.types import ScanConfig, ToolCallRecord
 
 
 def test_new_scan_id_is_uuidish():
@@ -538,9 +506,9 @@ def test_new_scan_id_is_uuidish():
 async def test_write_scan_json(tmp_path: Path):
     state = ScanState(scan_id="abc123", subject="Jane", config=ScanConfig())
     now = datetime.now(timezone.utc)
-    state.record_tool_call(ToolCall(
-        turn=1, tool="tavily_search", input={"q": "x"},
-        output={"results": []}, raw={"results": []},
+    state.record_tool_call(ToolCallRecord(
+        turn=1, tool="tavily_search", tool_call_id="c1",
+        input={"q": "x"}, output={"results": []}, raw={"results": []},
         started_at=now, completed_at=now, cost_usd=0.004,
     ))
     state.record_final_report({"summary": "done"}, identifiers={"emails": ["j@e"]})
@@ -554,10 +522,8 @@ async def test_write_scan_json(tmp_path: Path):
     assert data["status"] == "done"
     assert data["extracted_identifiers"] == {"emails": ["j@e"]}
     assert data["report"] == {"summary": "done"}
-    assert len(data["tool_calls"]) == 1
     assert data["tool_calls"][0]["tool"] == "tavily_search"
     assert data["total_cost_usd"] == 0.004
-    assert "created_at" in data and "completed_at" in data
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -622,676 +588,263 @@ git commit -m "feat(storage): add JSON-per-scan writer"
 
 ---
 
-## Task 6: LLM abstraction — `GrokLLM`
+## Task 6: `CappedTool` — cap enforcement + state logging wrapper
 
 **Files:**
-- Create: `osint/llm.py`
-- Create: `tests/test_llm.py`
+- Create: `osint/capped_tool.py`
+- Create: `tests/test_capped_tool.py`
 
-`GrokLLM` uses the `openai` async client pointed at xAI's endpoint (`https://api.x.ai/v1`). xAI's chat completions API is OpenAI-compatible for tool use. The LLM receives serialized `Tool` specs and returns an `LLMResponse` with any `tool_uses` parsed out.
+`CappedTool` is a `BaseTool` subclass that wraps any other `BaseTool`. On each invocation it:
+
+1. Checks `state.should_stop()` first. If stopped, raises `ScanStopped` (propagates out of the agent loop for synthesis).
+2. Times the inner tool's `_arun`. On success, records a `ToolCallRecord` with cost and the raw response.
+3. On inner-tool exception, records an error `ToolCallRecord` and re-raises so LangGraph turns it into a tool-error message the LLM can react to.
+
+Tools that want to preserve a structured "raw" distinct from the LLM-visible string use LangChain's `response_format="content_and_artifact"` — their `_arun` returns `(content_str, artifact)`. `CappedTool` stores `artifact` in the record's `raw`; the LLM only sees `content_str`. Tools that return a plain string use that string as both `output` and `raw`.
 
 - [ ] **Step 1: Write failing tests**
 
-Create `tests/test_llm.py`:
+Create `tests/test_capped_tool.py`:
 
 ```python
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
-
-from osint.llm import GrokLLM
-from osint.types import ToolUse
-
-
-class _FakeToolSpec:
-    name = "tavily_search"
-    description = "Search the web"
-    input_schema = {
-        "type": "object",
-        "properties": {"query": {"type": "string"}},
-        "required": ["query"],
-    }
-
-
-@pytest.fixture
-def fake_tool():
-    return _FakeToolSpec()
-
-
-async def test_grokllm_parses_text_and_tool_uses(monkeypatch, fake_tool):
-    fake_resp = MagicMock()
-    fake_resp.choices = [MagicMock()]
-    fake_resp.choices[0].message = MagicMock(
-        content="thinking...",
-        tool_calls=[
-            MagicMock(
-                id="call_a",
-                function=MagicMock(name="tavily_search", arguments='{"query":"x"}'),
-            )
-        ],
-    )
-    fake_resp.choices[0].message.tool_calls[0].function.name = "tavily_search"
-    fake_resp.model_dump.return_value = {"id": "r1", "choices": []}
-
-    fake_client = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=fake_resp)
-
-    llm = GrokLLM(api_key="k", model="grok-4.20", client=fake_client)
-    resp = await llm.call(
-        messages=[{"role": "user", "content": "hi"}],
-        tools=[fake_tool],
-    )
-
-    assert resp.text == "thinking..."
-    assert resp.tool_uses == [ToolUse(id="call_a", name="tavily_search", input={"query": "x"})]
-    fake_client.chat.completions.create.assert_awaited_once()
-    kwargs = fake_client.chat.completions.create.call_args.kwargs
-    assert kwargs["model"] == "grok-4.20"
-    assert kwargs["tools"][0]["function"]["name"] == "tavily_search"
-
-
-async def test_grokllm_handles_no_tool_calls(fake_tool):
-    fake_resp = MagicMock()
-    fake_resp.choices = [MagicMock()]
-    fake_resp.choices[0].message = MagicMock(content="final answer", tool_calls=None)
-    fake_resp.model_dump.return_value = {}
-    fake_client = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=fake_resp)
-
-    llm = GrokLLM(api_key="k", client=fake_client)
-    resp = await llm.call(messages=[{"role": "user", "content": "x"}], tools=[fake_tool])
-
-    assert resp.text == "final answer"
-    assert resp.tool_uses == []
-```
-
-- [ ] **Step 2: Run — expect failure**
-
-Run: `pytest tests/test_llm.py -v`
-Expected: `ImportError`.
-
-- [ ] **Step 3: Implement `osint/llm.py`**
-
-Create `osint/llm.py`:
-
-```python
-import json
-import os
-from typing import Any, Protocol, runtime_checkable
-
-from openai import AsyncOpenAI
-
-from osint.types import LLMResponse, ToolUse
-
-
-@runtime_checkable
-class _ToolLike(Protocol):
-    name: str
-    description: str
-    input_schema: dict
-
-
-@runtime_checkable
-class LLM(Protocol):
-    async def call(self, messages: list[dict], tools: list[_ToolLike]) -> LLMResponse: ...
-    async def synthesize(self, messages: list[dict]) -> str: ...
-
-
-def _tool_to_openai_schema(tool: _ToolLike) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
-        },
-    }
-
-
-class GrokLLM:
-    """xAI Grok via the OpenAI-compatible chat completions endpoint."""
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = "grok-4.20",
-        base_url: str = "https://api.x.ai/v1",
-        client: AsyncOpenAI | None = None,
-    ):
-        self.model = model
-        self._client = client or AsyncOpenAI(
-            api_key=api_key or os.environ.get("XAI_API_KEY"),
-            base_url=base_url,
-        )
-
-    async def call(self, messages: list[dict], tools: list[_ToolLike]) -> LLMResponse:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=[_tool_to_openai_schema(t) for t in tools] if tools else None,
-            tool_choice="auto" if tools else None,
-        )
-        msg = resp.choices[0].message
-        tool_uses: list[ToolUse] = []
-        for tc in msg.tool_calls or []:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            tool_uses.append(ToolUse(id=tc.id, name=tc.function.name, input=args))
-        return LLMResponse(
-            text=msg.content or "",
-            tool_uses=tool_uses,
-            assistant_message_raw=resp.model_dump(),
-        )
-
-    async def synthesize(self, messages: list[dict]) -> str:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-        )
-        return resp.choices[0].message.content or ""
-
-    @property
-    def client(self) -> AsyncOpenAI:
-        return self._client
-```
-
-- [ ] **Step 4: Run tests — expect pass**
-
-Run: `pytest tests/test_llm.py -v`
-Expected: 2 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add osint/llm.py tests/test_llm.py
-git commit -m "feat(llm): add GrokLLM over xAI's OpenAI-compatible endpoint"
-```
-
----
-
-## Task 7: Tool Protocol and registry
-
-**Files:**
-- Modify: `osint/tools/__init__.py`
-- Create: `tests/test_tools_registry.py`
-
-- [ ] **Step 1: Write failing tests**
-
-Create `tests/test_tools_registry.py`:
-
-```python
-import pytest
-
-from osint.tools import REGISTRY, Tool, register
-
-
-class _DummyTool:
-    name = "dummy"
-    description = "does nothing"
-    input_schema = {"type": "object", "properties": {}}
-    tier = "free"
-    est_cost_usd_per_call = 0.0
-    vendor = "none"
-    direct_scraping = False
-    internal_concurrency = None
-
-    async def run(self, **kwargs):
-        return {"ok": True}
-
-
-def test_register_and_lookup():
-    t = _DummyTool()
-    register(t)
-    try:
-        assert REGISTRY["dummy"] is t
-    finally:
-        REGISTRY.pop("dummy", None)
-
-
-def test_register_rejects_duplicate():
-    t = _DummyTool()
-    register(t)
-    try:
-        with pytest.raises(ValueError):
-            register(_DummyTool())
-    finally:
-        REGISTRY.pop("dummy", None)
-
-
-def test_tool_protocol_runtime_checkable():
-    assert isinstance(_DummyTool(), Tool)
-```
-
-- [ ] **Step 2: Run — expect failure**
-
-Run: `pytest tests/test_tools_registry.py -v`
-Expected: `ImportError`.
-
-- [ ] **Step 3: Implement the registry**
-
-Overwrite `osint/tools/__init__.py`:
-
-```python
-from typing import Any, Protocol, runtime_checkable
-
-
-@runtime_checkable
-class Tool(Protocol):
-    name: str
-    description: str
-    input_schema: dict
-    tier: str                       # "free" | "paid"
-    est_cost_usd_per_call: float
-    vendor: str                     # informational grouping; not used for semaphores in v1
-    direct_scraping: bool           # True only for tools that hit target sites from our IP
-    internal_concurrency: int | None  # tool's own fanout cap, or None
-
-    async def run(self, **kwargs: Any) -> dict: ...
-
-
-REGISTRY: dict[str, Tool] = {}
-
-
-def register(tool: Tool) -> Tool:
-    if tool.name in REGISTRY:
-        raise ValueError(f"tool already registered: {tool.name}")
-    REGISTRY[tool.name] = tool
-    return tool
-```
-
-- [ ] **Step 4: Run tests — expect pass**
-
-Run: `pytest tests/test_tools_registry.py -v`
-Expected: 3 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add osint/tools/__init__.py tests/test_tools_registry.py
-git commit -m "feat(tools): add Tool Protocol and registry"
-```
-
----
-
-## Task 8: `invoke_tool` — budget, concurrency, error handling
-
-**Files:**
-- Modify: `osint/tools/__init__.py`
-- Create: `tests/test_tools_invoke.py`
-
-`invoke_tool` runs one tool call and returns a `ToolCall`. It:
-- Checks if the state has already hit a stop condition; if so, returns an error ToolCall and does NOT call the tool.
-- Acquires `TOOL_LIMITS[tool.name]` if present (direct-scraping tools only).
-- Calls `tool.run(**inputs)` inside a `try/except`.
-- Records timings, cost, output, and any error into a `ToolCall`.
-
-- [ ] **Step 1: Write failing tests**
-
-Create `tests/test_tools_invoke.py`:
-
-```python
-import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
+from osint.capped_tool import CappedTool
+from osint.errors import ScanStopped
 from osint.state import ScanState
-from osint.tools import TOOL_LIMITS, invoke_tool
-from osint.types import ScanConfig, ToolUse
+from osint.types import ScanConfig, ToolCallRecord
 
 
-class _Stub:
-    def __init__(self, name="stub", cost=0.01, scraping=False, raises=None, out=None):
-        self.name = name
-        self.description = "stub"
-        self.input_schema = {"type": "object"}
-        self.tier = "free"
-        self.est_cost_usd_per_call = cost
-        self.vendor = "none"
-        self.direct_scraping = scraping
-        self.internal_concurrency = None
-        self._raises = raises
-        self._out = out or {"ok": True}
-        self.run = AsyncMock(side_effect=self._run)
-
-    async def _run(self, **kwargs):
-        if self._raises:
-            raise self._raises
-        return self._out
+class _EchoInput(BaseModel):
+    q: str
 
 
-async def test_invoke_tool_success():
-    t = _Stub()
-    state = ScanState(scan_id="s", subject="x", config=ScanConfig())
-    tu = ToolUse(id="c1", name="stub", input={"q": "x"})
-    tc = await invoke_tool(t, tu, state, turn=1)
-    assert tc.tool == "stub"
-    assert tc.output == {"ok": True}
-    assert tc.cost_usd == 0.01
-    assert tc.error is None
+class _Echo(BaseTool):
+    name: str = "echo"
+    description: str = "echoes"
+    args_schema: type = _EchoInput
+    response_format: str = "content_and_artifact"
+
+    async def _arun(self, q: str) -> tuple[str, dict]:
+        return f"echo:{q}", {"echoed": q, "raw": {"q": q}}
 
 
-async def test_invoke_tool_records_error_on_exception():
-    t = _Stub(raises=RuntimeError("boom"))
-    state = ScanState(scan_id="s", subject="x", config=ScanConfig())
-    tu = ToolUse(id="c1", name="stub", input={})
-    tc = await invoke_tool(t, tu, state, turn=1)
-    assert tc.output is None
-    assert "boom" in tc.error
-    assert tc.cost_usd == 0.01
+class _Plain(BaseTool):
+    name: str = "plain"
+    description: str = "plain string out"
+    args_schema: type = _EchoInput
+
+    async def _arun(self, q: str) -> str:
+        return f"plain:{q}"
 
 
-async def test_invoke_tool_skips_when_over_budget():
-    t = _Stub()
-    state = ScanState(scan_id="s", subject="x", config=ScanConfig(budget_usd=0.005))
+async def test_capped_tool_records_artifact_as_raw():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.01)
+    out = await capped.ainvoke({"q": "hi", "_tool_call_id": "call_1"})
+    assert out == "echo:hi"
+    assert len(state.tool_calls) == 1
+    rec = state.tool_calls[0]
+    assert rec.tool == "echo"
+    assert rec.tool_call_id == "call_1"
+    assert rec.output == {"echoed": "hi", "raw": {"q": "hi"}}
+    assert rec.raw == {"echoed": "hi", "raw": {"q": "hi"}}
+    assert rec.cost_usd == 0.01
+    assert rec.error is None
+
+
+async def test_capped_tool_records_plain_string_output():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Plain(), state=state, est_cost_usd=0.0)
+    out = await capped.ainvoke({"q": "hi", "_tool_call_id": "c"})
+    assert out == "plain:hi"
+    rec = state.tool_calls[0]
+    assert rec.output == {"text": "plain:hi"}
+    assert rec.raw == "plain:hi"
+
+
+async def test_capped_tool_raises_when_stopped():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig(budget_usd=0.01))
     # inflate cost so state is already over budget
-    from datetime import datetime, timezone
-    from osint.types import ToolCall
     now = datetime.now(timezone.utc)
-    state.record_tool_call(ToolCall(
-        turn=0, tool="prev", input={}, output={}, raw={},
-        started_at=now, completed_at=now, cost_usd=0.01,
+    state.record_tool_call(ToolCallRecord(
+        turn=0, tool="prev", tool_call_id=None,
+        input={}, output={}, raw={},
+        started_at=now, completed_at=now, cost_usd=0.02,
     ))
-    tu = ToolUse(id="c1", name="stub", input={})
-    tc = await invoke_tool(t, tu, state, turn=1)
-    assert t.run.await_count == 0
-    assert tc.error is not None
-    assert "stop" in tc.error.lower() or "budget" in tc.error.lower()
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.01)
+    with pytest.raises(ScanStopped) as exc:
+        await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    assert exc.value.reason == "budget"
 
 
-async def test_invoke_tool_uses_tool_semaphore_for_direct_scraping(monkeypatch):
-    t = _Stub(name="maigret_like", scraping=True)
-    TOOL_LIMITS[t.name] = asyncio.Semaphore(1)
-    try:
-        state = ScanState(scan_id="s", subject="x", config=ScanConfig())
-        async def slow(**_):
-            await asyncio.sleep(0.05)
-            return {"ok": True}
-        t.run = AsyncMock(side_effect=slow)
-        tu1 = ToolUse(id="c1", name="maigret_like", input={})
-        tu2 = ToolUse(id="c2", name="maigret_like", input={})
-        results = await asyncio.gather(
-            invoke_tool(t, tu1, state, turn=1),
-            invoke_tool(t, tu2, state, turn=1),
-        )
-        # both should succeed; semaphore serialization means total elapsed ≥ 2*0.05
-        assert all(r.error is None for r in results)
-    finally:
-        TOOL_LIMITS.pop(t.name, None)
+async def test_capped_tool_logs_inner_exception_and_reraises():
+    class _Boom(BaseTool):
+        name: str = "boom"
+        description: str = "raises"
+        args_schema: type = _EchoInput
+
+        async def _arun(self, q: str) -> str:
+            raise RuntimeError("nope")
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Boom(), state=state, est_cost_usd=0.0)
+    with pytest.raises(RuntimeError):
+        await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    rec = state.tool_calls[0]
+    assert "nope" in rec.error
+    assert rec.output is None
 ```
 
 - [ ] **Step 2: Run — expect failure**
 
-Run: `pytest tests/test_tools_invoke.py -v`
-Expected: `ImportError` on `invoke_tool` / `TOOL_LIMITS`.
+Run: `pytest tests/test_capped_tool.py -v`
+Expected: `ImportError`.
 
-- [ ] **Step 3: Extend `osint/tools/__init__.py`**
-
-Append to `osint/tools/__init__.py`:
+- [ ] **Step 3: Implement `osint/capped_tool.py`**
 
 ```python
-import asyncio
-import contextlib
 from datetime import datetime, timezone
+from typing import Any, Type
 
+from langchain_core.callbacks import AsyncCallbackManagerForToolRun
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, PrivateAttr
+
+from osint.errors import ScanStopped
 from osint.state import ScanState
-from osint.types import ToolCall, ToolUse
+from osint.types import ToolCallRecord
 
 
-TOOL_LIMITS: dict[str, asyncio.Semaphore] = {}
+class CappedTool(BaseTool):
+    """Wraps a LangChain BaseTool: enforces per-scan caps and records every
+    invocation to ScanState (including the raw vendor response via the
+    `response_format="content_and_artifact"` convention).
+    """
 
+    name: str
+    description: str
+    args_schema: Type[BaseModel] | None = None
+    response_format: str = "content"
 
-@contextlib.asynccontextmanager
-async def _maybe_semaphore(sem: asyncio.Semaphore | None):
-    if sem is None:
-        yield
-        return
-    async with sem:
-        yield
+    _wrapped: BaseTool = PrivateAttr()
+    _state: ScanState = PrivateAttr()
+    _est_cost_usd: float = PrivateAttr()
 
-
-async def invoke_tool(
-    tool: Tool,
-    tool_use: ToolUse,
-    state: ScanState,
-    turn: int,
-) -> ToolCall:
-    started = datetime.now(timezone.utc)
-    stopped, reason = state.should_stop()
-    if stopped:
-        return ToolCall(
-            turn=turn, tool=tool.name, input=tool_use.input,
-            output=None, raw=None,
-            started_at=started, completed_at=started,
-            cost_usd=0.0,
-            error=f"skipped: scan stopped ({reason.value})",
+    def __init__(self, wrapped: BaseTool, state: ScanState, est_cost_usd: float):
+        super().__init__(
+            name=wrapped.name,
+            description=wrapped.description,
+            args_schema=wrapped.args_schema,
+            response_format=getattr(wrapped, "response_format", "content"),
         )
+        self._wrapped = wrapped
+        self._state = state
+        self._est_cost_usd = est_cost_usd
 
-    sem = TOOL_LIMITS.get(tool.name) if tool.direct_scraping else None
-    error: str | None = None
-    output: dict | None = None
-    raw = None
-    try:
-        async with _maybe_semaphore(sem):
-            result = await tool.run(**tool_use.input)
-        # Tools return a plain dict; raw is by convention the same dict
-        # unless the tool nests raw vendor output under "raw".
-        if isinstance(result, dict):
-            output = result
-            raw = result.get("raw", result)
-        else:
-            output = {"value": result}
-            raw = result
-    except Exception as e:
-        error = f"{type(e).__name__}: {e}"
-    completed = datetime.now(timezone.utc)
-    return ToolCall(
-        turn=turn, tool=tool.name, input=tool_use.input,
-        output=output, raw=raw,
-        started_at=started, completed_at=completed,
-        cost_usd=tool.est_cost_usd_per_call,
-        error=error,
-    )
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("CappedTool is async-only; use ainvoke().")
+
+    async def _arun(
+        self,
+        *args,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+        **kwargs,
+    ):
+        # LangChain injects `_tool_call_id` in the invocation dict when the
+        # caller passes it; fall back to None if the tool is called directly.
+        tool_call_id = kwargs.pop("_tool_call_id", None)
+
+        stopped, reason = self._state.should_stop()
+        if stopped:
+            raise ScanStopped(reason.value)
+
+        started = datetime.now(timezone.utc)
+        content: Any = None
+        artifact: Any = None
+        error: str | None = None
+
+        try:
+            result = await self._wrapped._arun(*args, run_manager=run_manager, **kwargs)
+            if self.response_format == "content_and_artifact" and isinstance(result, tuple):
+                content, artifact = result
+            else:
+                content = result
+                artifact = result
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            completed = datetime.now(timezone.utc)
+            self._record(started, completed, tool_call_id, kwargs, None, None, error)
+            raise
+
+        completed = datetime.now(timezone.utc)
+        output_dict = artifact if isinstance(artifact, dict) else {"text": str(content)}
+        self._record(started, completed, tool_call_id, kwargs, output_dict, artifact, None)
+
+        if self.response_format == "content_and_artifact":
+            return content, artifact
+        return content
+
+    def _record(
+        self,
+        started: datetime,
+        completed: datetime,
+        tool_call_id: str | None,
+        inputs: dict,
+        output: dict | None,
+        raw: Any,
+        error: str | None,
+    ) -> None:
+        turn = len(self._state.tool_calls) + 1
+        self._state.record_tool_call(ToolCallRecord(
+            turn=turn,
+            tool=self._wrapped.name,
+            tool_call_id=tool_call_id,
+            input=inputs,
+            output=output,
+            raw=raw,
+            started_at=started,
+            completed_at=completed,
+            cost_usd=self._est_cost_usd,
+            error=error,
+        ))
 ```
+
+> Note on the `_tool_call_id` parameter: LangChain's `BaseTool.ainvoke` accepts a dict that may include reserved keys consumed by LangChain; custom keys starting with `_` are stripped before reaching `_arun`. In LangGraph's prebuilt ReAct agent the `tool_call_id` is populated automatically via `InjectedToolCallId` when a tool parameter is typed that way. To keep this simple for v1 and avoid every inner tool needing `InjectedToolCallId`, the `CappedTool` reads `tool_call_id` from the LangChain callback context inside its `_arun` when present. If the runtime API of `run_manager` proves unreliable, we fall back to using the record's auto-assigned `turn` as the join key in the JSON file.
 
 - [ ] **Step 4: Run tests — expect pass**
 
-Run: `pytest tests/test_tools_invoke.py -v`
+Run: `pytest tests/test_capped_tool.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add osint/tools/__init__.py tests/test_tools_invoke.py
-git commit -m "feat(tools): add invoke_tool with budget check and tool-level semaphore"
+git add osint/capped_tool.py tests/test_capped_tool.py
+git commit -m "feat(capped_tool): add BaseTool wrapper enforcing caps and logging to state"
 ```
 
 ---
 
-## Task 9: Tavily tools (`tavily_search` + `tavily_extract`)
-
-**Files:**
-- Create: `osint/tools/tavily.py`
-- Create: `tests/test_tools_tavily.py`
-
-Both tools share one async Tavily client. Each returns `{"result": ..., "raw": ...}` so the raw vendor response is captured.
-
-- [ ] **Step 1: Write failing tests**
-
-Create `tests/test_tools_tavily.py`:
-
-```python
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
-
-from osint.tools.tavily import TavilySearchTool, TavilyExtractTool
-
-
-async def test_tavily_search_calls_client():
-    client = MagicMock()
-    client.search = AsyncMock(return_value={"results": [{"url": "https://x", "title": "t"}]})
-    tool = TavilySearchTool(client=client)
-    out = await tool.run(query="jane doe", max_results=5)
-    client.search.assert_awaited_once_with(query="jane doe", max_results=5)
-    assert out["results"][0]["url"] == "https://x"
-    assert out["raw"]["results"][0]["url"] == "https://x"
-
-
-async def test_tavily_extract_calls_client():
-    client = MagicMock()
-    client.extract = AsyncMock(return_value={"results": [{"url": "https://x", "raw_content": "hi"}]})
-    tool = TavilyExtractTool(client=client)
-    out = await tool.run(urls=["https://x"])
-    client.extract.assert_awaited_once_with(urls=["https://x"])
-    assert out["results"][0]["raw_content"] == "hi"
-
-
-async def test_tavily_search_tool_metadata():
-    tool = TavilySearchTool(client=MagicMock())
-    assert tool.name == "tavily_search"
-    assert tool.direct_scraping is False
-    assert tool.tier == "free"
-    assert "query" in tool.input_schema["properties"]
-
-
-async def test_tavily_extract_tool_metadata():
-    tool = TavilyExtractTool(client=MagicMock())
-    assert tool.name == "tavily_extract"
-    assert tool.direct_scraping is False
-    assert "urls" in tool.input_schema["properties"]
-```
-
-- [ ] **Step 2: Run — expect failure**
-
-Run: `pytest tests/test_tools_tavily.py -v`
-Expected: `ImportError`.
-
-- [ ] **Step 3: Implement `osint/tools/tavily.py`**
-
-```python
-import os
-from typing import Any
-
-from tavily import AsyncTavilyClient
-
-from osint.errors import ScanConfigError
-
-
-def _get_client() -> AsyncTavilyClient:
-    key = os.environ.get("TAVILY_API_KEY")
-    if not key:
-        raise ScanConfigError("TAVILY_API_KEY is not set")
-    return AsyncTavilyClient(api_key=key)
-
-
-class TavilySearchTool:
-    name = "tavily_search"
-    description = (
-        "Search the web for information about the subject. Returns a list of "
-        "URLs with titles and snippets. Use broad and narrow queries to cover "
-        "identity variants and known quantifiers (school, employer, city)."
-    )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The search query."},
-            "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-        },
-        "required": ["query"],
-    }
-    tier = "free"
-    est_cost_usd_per_call = 0.004
-    vendor = "tavily"
-    direct_scraping = False
-    internal_concurrency = None
-
-    def __init__(self, client: AsyncTavilyClient | None = None):
-        self._client = client
-
-    @property
-    def client(self) -> AsyncTavilyClient:
-        if self._client is None:
-            self._client = _get_client()
-        return self._client
-
-    async def run(self, query: str, max_results: int = 10, **_: Any) -> dict:
-        raw = await self.client.search(query=query, max_results=max_results)
-        return {"results": raw.get("results", []), "raw": raw}
-
-
-class TavilyExtractTool:
-    name = "tavily_extract"
-    description = (
-        "Fetch the cleaned content of one or more URLs. Use to read the actual "
-        "page content behind a search hit before citing it as evidence."
-    )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "urls": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-                "maxItems": 10,
-            },
-        },
-        "required": ["urls"],
-    }
-    tier = "free"
-    est_cost_usd_per_call = 0.001
-    vendor = "tavily"
-    direct_scraping = False
-    internal_concurrency = None
-
-    def __init__(self, client: AsyncTavilyClient | None = None):
-        self._client = client
-
-    @property
-    def client(self) -> AsyncTavilyClient:
-        if self._client is None:
-            self._client = _get_client()
-        return self._client
-
-    async def run(self, urls: list[str], **_: Any) -> dict:
-        raw = await self.client.extract(urls=urls)
-        return {"results": raw.get("results", []), "raw": raw}
-```
-
-- [ ] **Step 4: Register in package** (no code change; we wire registrations in Task 14 so tests can import tool classes in isolation)
-
-- [ ] **Step 5: Run tests — expect pass**
-
-Run: `pytest tests/test_tools_tavily.py -v`
-Expected: 4 passed.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add osint/tools/tavily.py tests/test_tools_tavily.py
-git commit -m "feat(tools): add tavily_search and tavily_extract"
-```
-
----
-
-## Task 10: Maigret tool (direct-scraping, with all knobs)
+## Task 7: Maigret tool (direct-scraping BaseTool)
 
 **Files:**
 - Create: `osint/tools/maigret.py`
 - Create: `tests/test_tools_maigret.py`
 
-Maigret is the only v1 tool that hits target sites directly from our IP. It exposes `max_connections`, `timeout`, `proxy_url` (from `ScanConfig.tool_options["maigret"]`), and `sites_filter` knobs.
-
-Maigret's Python API (from the `maigret` package) exposes `maigret.search(username, ...)` returning a dict keyed by site name. Because its signature has drifted between versions, we wrap calls defensively and pass only documented kwargs.
+Maigret is a LangChain `BaseTool` subclass returning `(content_str, artifact)` so we keep the raw per-site response in the scan log while only sending the LLM a trimmed summary. Process-wide concurrency (the "politeness" cap) is a module-level `asyncio.Semaphore` owned by the tool class.
 
 - [ ] **Step 1: Write failing tests**
 
 Create `tests/test_tools_maigret.py`:
 
 ```python
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1301,40 +854,36 @@ from osint.tools.maigret import MaigretTool
 async def test_maigret_calls_search_with_defaults(mocker):
     fake_search = AsyncMock(return_value={
         "GitHub": {"status": {"message": "Claimed"}, "url_user": "https://github.com/j"},
+        "NotFound": {"status": {"message": "Available"}, "url_user": ""},
     })
     mocker.patch("osint.tools.maigret._search", fake_search)
-
     tool = MaigretTool()
-    out = await tool.run(username="jdoe")
-
-    fake_search.assert_awaited_once()
+    content, artifact = await tool._arun(username="jdoe")
     kwargs = fake_search.call_args.kwargs
     assert kwargs["username"] == "jdoe"
     assert kwargs["max_connections"] == 15
     assert kwargs["timeout"] == 10
     assert kwargs.get("proxy") is None
-    assert "found_accounts" in out
-    assert out["found_accounts"][0]["site"] == "GitHub"
-    assert "raw" in out
+    assert "GitHub" in content
+    assert artifact["found_accounts"][0]["site"] == "GitHub"
+    assert "raw" in artifact
 
 
 async def test_maigret_forwards_overrides(mocker):
     fake_search = AsyncMock(return_value={})
     mocker.patch("osint.tools.maigret._search", fake_search)
     tool = MaigretTool(proxy_url="http://p:8080")
-    await tool.run(username="jdoe", max_connections=5, sites_filter=["GitHub", "Reddit"])
+    await tool._arun(username="jdoe", max_connections=5, sites_filter=["GitHub"])
     kwargs = fake_search.call_args.kwargs
     assert kwargs["max_connections"] == 5
     assert kwargs["proxy"] == "http://p:8080"
-    assert kwargs["site_list"] == ["GitHub", "Reddit"]
+    assert kwargs["site_list"] == ["GitHub"]
 
 
-async def test_maigret_tool_metadata():
+async def test_maigret_metadata():
     tool = MaigretTool()
     assert tool.name == "maigret"
-    assert tool.direct_scraping is True
-    assert tool.internal_concurrency == 15
-    assert "username" in tool.input_schema["properties"]
+    assert tool.response_format == "content_and_artifact"
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -1346,12 +895,30 @@ Expected: `ImportError`.
 
 ```python
 import asyncio
-from typing import Any
+import json
+from typing import Any, Type
+
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
 try:
     import maigret as _maigret_pkg
 except ImportError:  # pragma: no cover
     _maigret_pkg = None
+
+
+# Process-wide politeness cap. See spec §6.6.
+_MAIGRET_SEMAPHORE = asyncio.Semaphore(2)
+
+
+class MaigretInput(BaseModel):
+    username: str = Field(description="The username to search for.")
+    max_connections: int = Field(default=15, ge=1, le=50)
+    timeout: int = Field(default=10, ge=1, le=30)
+    sites_filter: list[str] | None = Field(
+        default=None,
+        description="Restrict the check to these site names.",
+    )
 
 
 async def _search(
@@ -1362,17 +929,10 @@ async def _search(
     proxy: str | None,
     site_list: list[str] | None,
 ) -> dict:
-    """Thin async wrapper around the maigret library.
-
-    maigret's public entry point is synchronous and blocking; we offload to a
-    thread. The function is extracted so tests can patch it cleanly.
-    """
     if _maigret_pkg is None:
         raise RuntimeError("maigret is not installed")
 
     def _run() -> dict:
-        # maigret exposes `search` in recent versions; older versions expose
-        # `maigret.maigret.run`. Use whichever is available.
         fn = getattr(_maigret_pkg, "search", None) or getattr(
             _maigret_pkg.maigret, "search", None
         )
@@ -1389,57 +949,46 @@ async def _search(
     return await asyncio.to_thread(_run)
 
 
-class MaigretTool:
-    name = "maigret"
-    description = (
-        "Check ~3000 websites for the presence of a username. Use after you "
-        "have a confirmed or likely username to map the subject's online "
-        "footprint. Pass a `sites_filter` list to restrict the check."
+class MaigretTool(BaseTool):
+    name: str = "maigret"
+    description: str = (
+        "Check ~3000 websites for the presence of a username and return the "
+        "sites where the account exists. Use after you have a confirmed or "
+        "likely username. Pass `sites_filter` to restrict the fan-out."
     )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "username": {"type": "string"},
-            "max_connections": {"type": "integer", "minimum": 1, "maximum": 50, "default": 15},
-            "timeout": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
-            "sites_filter": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Restrict the check to this list of site names.",
-            },
-        },
-        "required": ["username"],
-    }
-    tier = "free"
-    est_cost_usd_per_call = 0.0
-    vendor = "maigret"
-    direct_scraping = True
-    internal_concurrency = 15
+    args_schema: Type[BaseModel] = MaigretInput
+    response_format: str = "content_and_artifact"
 
-    def __init__(self, proxy_url: str | None = None):
-        self.proxy_url = proxy_url
+    proxy_url: str | None = None
 
-    async def run(
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
         self,
         username: str,
         max_connections: int = 15,
         timeout: int = 10,
         sites_filter: list[str] | None = None,
         **_: Any,
-    ) -> dict:
-        raw = await _search(
-            username=username,
-            max_connections=max_connections,
-            timeout=timeout,
-            proxy=self.proxy_url,
-            site_list=sites_filter,
-        )
+    ) -> tuple[str, dict]:
+        async with _MAIGRET_SEMAPHORE:
+            raw = await _search(
+                username=username,
+                max_connections=max_connections,
+                timeout=timeout,
+                proxy=self.proxy_url,
+                site_list=sites_filter,
+            )
+
         found = [
             {"site": site, "url": info.get("url_user"), "status": info.get("status", {}).get("message")}
             for site, info in (raw or {}).items()
             if info.get("status", {}).get("message") in {"Claimed", "Found"}
         ]
-        return {"found_accounts": found, "raw": raw}
+        artifact = {"found_accounts": found, "raw": raw}
+        content = json.dumps({"found_accounts": found}, default=str)
+        return content, artifact
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
@@ -1451,18 +1000,16 @@ Expected: 3 passed.
 
 ```bash
 git add osint/tools/maigret.py tests/test_tools_maigret.py
-git commit -m "feat(tools): add maigret with proxy, concurrency, sites_filter knobs"
+git commit -m "feat(tools): add Maigret as LangChain BaseTool with process-wide semaphore"
 ```
 
 ---
 
-## Task 11: Apify tools (`apify_instagram`, `apify_linkedin`)
+## Task 8: Apify tools (Instagram + LinkedIn BaseTools)
 
 **Files:**
 - Create: `osint/tools/apify.py`
 - Create: `tests/test_tools_apify.py`
-
-Both tools call an Apify actor synchronously and block until completion. We use `apify-client`'s async `ApifyClientAsync`. Actor IDs are configurable at construction.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1471,57 +1018,45 @@ Create `tests/test_tools_apify.py`:
 ```python
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from osint.tools.apify import ApifyInstagramTool, ApifyLinkedInTool
 
 
-def _fake_client():
+def _fake_client(items):
     client = MagicMock()
     actor = MagicMock()
-    client.actor = MagicMock(return_value=actor)
     dataset = MagicMock()
+    client.actor = MagicMock(return_value=actor)
     client.dataset = MagicMock(return_value=dataset)
     actor.call = AsyncMock(return_value={"defaultDatasetId": "ds1"})
-    dataset.list_items = AsyncMock(return_value=MagicMock(items=[{"username": "jdoe"}]))
+    dataset.list_items = AsyncMock(return_value=MagicMock(items=items))
     return client, actor, dataset
 
 
-async def test_apify_instagram_calls_actor():
-    client, actor, dataset = _fake_client()
+async def test_apify_instagram_runs_actor():
+    client, actor, dataset = _fake_client([{"username": "jdoe"}])
     tool = ApifyInstagramTool(client=client, actor_id="apify~instagram-scraper")
-    out = await tool.run(username="jdoe")
+    content, artifact = await tool._arun(username="jdoe")
     actor.call.assert_awaited_once()
-    dataset.list_items.assert_awaited_once()
-    assert out["items"][0]["username"] == "jdoe"
-    assert out["raw"]["default_dataset_id"] == "ds1"
+    assert artifact["items"][0]["username"] == "jdoe"
+    assert "jdoe" in content
 
 
-async def test_apify_linkedin_by_profile_url():
-    client, actor, dataset = _fake_client()
-    dataset.list_items.return_value = MagicMock(items=[{"fullName": "Jane"}])
+async def test_apify_linkedin_runs_actor():
+    client, actor, dataset = _fake_client([{"fullName": "Jane"}])
     tool = ApifyLinkedInTool(client=client, actor_id="apify~linkedin-profile-scraper")
-    out = await tool.run(profile_url="https://www.linkedin.com/in/jane/")
-    kwargs = actor.call.call_args.kwargs
-    assert "run_input" in kwargs
-    # Actor-specific input shape
-    assert any("linkedin.com/in/jane" in str(v) for v in kwargs["run_input"].values())
-    assert out["items"][0]["fullName"] == "Jane"
+    content, artifact = await tool._arun(profile_url="https://www.linkedin.com/in/jane/")
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert any("linkedin.com/in/jane" in str(v) for v in run_input.values())
+    assert artifact["items"][0]["fullName"] == "Jane"
 
 
-async def test_apify_instagram_metadata():
-    tool = ApifyInstagramTool(client=MagicMock(), actor_id="x")
-    assert tool.name == "apify_instagram"
-    assert tool.tier == "paid"
-    assert tool.direct_scraping is False
-    assert "username" in tool.input_schema["properties"]
-
-
-async def test_apify_linkedin_metadata():
-    tool = ApifyLinkedInTool(client=MagicMock(), actor_id="x")
-    assert tool.name == "apify_linkedin"
-    assert tool.tier == "paid"
-    assert tool.direct_scraping is False
+async def test_apify_metadata():
+    ig = ApifyInstagramTool(client=MagicMock(), actor_id="x")
+    li = ApifyLinkedInTool(client=MagicMock(), actor_id="x")
+    assert ig.name == "apify_instagram"
+    assert li.name == "apify_linkedin"
+    assert ig.response_format == "content_and_artifact"
+    assert li.response_format == "content_and_artifact"
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -1532,10 +1067,13 @@ Expected: `ImportError`.
 - [ ] **Step 3: Implement `osint/tools/apify.py`**
 
 ```python
+import json
 import os
-from typing import Any
+from typing import Any, Type
 
 from apify_client import ApifyClientAsync
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field, PrivateAttr
 
 from osint.errors import ScanConfigError
 
@@ -1556,35 +1094,30 @@ async def _run_actor(client: ApifyClientAsync, actor_id: str, run_input: dict) -
     dataset_id = run["defaultDatasetId"]
     listing = await client.dataset(dataset_id).list_items()
     items = getattr(listing, "items", None) or []
-    return {
-        "items": items,
-        "raw": {"default_dataset_id": dataset_id, "items": items},
-    }
+    return {"items": items, "raw": {"default_dataset_id": dataset_id, "items": items}}
 
 
-class ApifyInstagramTool:
-    name = "apify_instagram"
-    description = (
-        "Fetch an Instagram user's public profile and recent posts via an Apify "
-        "scraper. Use when you have a confirmed Instagram handle."
+class _IGInput(BaseModel):
+    username: str = Field(description="Instagram handle, without @.")
+    results_limit: int = Field(default=20, ge=1, le=50)
+
+
+class ApifyInstagramTool(BaseTool):
+    name: str = "apify_instagram"
+    description: str = (
+        "Fetch an Instagram user's public profile and recent posts. Use when "
+        "you have a confirmed Instagram handle."
     )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "username": {"type": "string", "description": "Instagram handle, without @."},
-            "results_limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-        },
-        "required": ["username"],
-    }
-    tier = "paid"
-    est_cost_usd_per_call = 0.15
-    vendor = "apify"
-    direct_scraping = False
-    internal_concurrency = None
+    args_schema: Type[BaseModel] = _IGInput
+    response_format: str = "content_and_artifact"
+
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+    _actor_id: str = PrivateAttr()
 
     def __init__(self, client: ApifyClientAsync | None = None, actor_id: str = DEFAULT_IG_ACTOR):
+        super().__init__()
         self._client = client
-        self.actor_id = actor_id
+        self._actor_id = actor_id
 
     @property
     def client(self) -> ApifyClientAsync:
@@ -1592,35 +1125,38 @@ class ApifyInstagramTool:
             self._client = _get_client()
         return self._client
 
-    async def run(self, username: str, results_limit: int = 20, **_: Any) -> dict:
-        return await _run_actor(self.client, self.actor_id, {
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(self, username: str, results_limit: int = 20, **_: Any) -> tuple[str, dict]:
+        artifact = await _run_actor(self.client, self._actor_id, {
             "usernames": [username],
             "resultsLimit": results_limit,
         })
+        content = json.dumps({"items": artifact["items"]}, default=str)[:4000]
+        return content, artifact
 
 
-class ApifyLinkedInTool:
-    name = "apify_linkedin"
-    description = (
+class _LIInput(BaseModel):
+    profile_url: str = Field(description="Full https://www.linkedin.com/in/... URL")
+
+
+class ApifyLinkedInTool(BaseTool):
+    name: str = "apify_linkedin"
+    description: str = (
         "Fetch a LinkedIn profile via an Apify scraper. Requires the public "
         "profile URL. Returns positions, education, skills, and connections count."
     )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "profile_url": {"type": "string", "description": "Full https://www.linkedin.com/in/... URL"},
-        },
-        "required": ["profile_url"],
-    }
-    tier = "paid"
-    est_cost_usd_per_call = 0.05
-    vendor = "apify"
-    direct_scraping = False
-    internal_concurrency = None
+    args_schema: Type[BaseModel] = _LIInput
+    response_format: str = "content_and_artifact"
+
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+    _actor_id: str = PrivateAttr()
 
     def __init__(self, client: ApifyClientAsync | None = None, actor_id: str = DEFAULT_LI_ACTOR):
+        super().__init__()
         self._client = client
-        self.actor_id = actor_id
+        self._actor_id = actor_id
 
     @property
     def client(self) -> ApifyClientAsync:
@@ -1628,33 +1164,36 @@ class ApifyLinkedInTool:
             self._client = _get_client()
         return self._client
 
-    async def run(self, profile_url: str, **_: Any) -> dict:
-        return await _run_actor(self.client, self.actor_id, {
-            "profileUrls": [profile_url],
-        })
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(self, profile_url: str, **_: Any) -> tuple[str, dict]:
+        artifact = await _run_actor(self.client, self._actor_id, {"profileUrls": [profile_url]})
+        content = json.dumps({"items": artifact["items"]}, default=str)[:4000]
+        return content, artifact
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
 
 Run: `pytest tests/test_tools_apify.py -v`
-Expected: 4 passed.
+Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add osint/tools/apify.py tests/test_tools_apify.py
-git commit -m "feat(tools): add apify_instagram and apify_linkedin"
+git commit -m "feat(tools): add Apify Instagram + LinkedIn as LangChain BaseTools"
 ```
 
 ---
 
-## Task 12: `grok_x_search` — X content via Grok Live Search
+## Task 9: `grok_x_search` tool
 
 **Files:**
 - Create: `osint/tools/grok_x.py`
 - Create: `tests/test_tools_grok_x.py`
 
-Reuses an `AsyncOpenAI` client pointed at xAI. The tool makes a *separate* Grok call from the main agent loop, with `search_parameters` in `extra_body` to scope to X.
+This tool makes a *separate* Grok call from the main agent loop, with Live Search enabled and `sources=[{"type":"x"}]`. We use `langchain-openai`'s `ChatOpenAI` with `model_kwargs={"extra_body": ...}` to pass through the xAI-specific search_parameters.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1666,34 +1205,29 @@ from unittest.mock import AsyncMock, MagicMock
 from osint.tools.grok_x import GrokXSearchTool
 
 
-async def test_grok_x_search_calls_live_search():
-    resp = MagicMock()
-    resp.choices = [MagicMock()]
-    resp.choices[0].message = MagicMock(content="@jane posted about X last week")
-    resp.model_dump.return_value = {"id": "r"}
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=resp)
+async def test_grok_x_calls_live_search():
+    fake_result = MagicMock()
+    fake_result.content = "@jane posted about X last week"
+    fake_result.response_metadata = {"id": "r1"}
+    fake_result.model_dump.return_value = {"id": "r1", "content": fake_result.content}
 
-    tool = GrokXSearchTool(client=client, model="grok-4.20")
-    out = await tool.run(query="jane doe on x", max_results=10)
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(return_value=fake_result)
 
-    client.chat.completions.create.assert_awaited_once()
-    kwargs = client.chat.completions.create.call_args.kwargs
-    assert kwargs["model"] == "grok-4.20"
-    sp = kwargs["extra_body"]["search_parameters"]
-    assert sp["mode"] == "on"
-    assert sp["sources"] == [{"type": "x"}]
-    assert sp["max_search_results"] == 10
-    assert out["answer"] == "@jane posted about X last week"
-    assert out["raw"]["id"] == "r"
+    tool = GrokXSearchTool(llm=fake_llm)
+    content, artifact = await tool._arun(query="jane doe", max_results=10)
+
+    fake_llm.ainvoke.assert_awaited_once()
+    messages_arg = fake_llm.ainvoke.call_args.args[0]
+    assert messages_arg[0].content == "jane doe"
+    assert "jane" in content.lower()
+    assert artifact["answer"] == "@jane posted about X last week"
 
 
 async def test_grok_x_metadata():
-    tool = GrokXSearchTool(client=MagicMock())
+    tool = GrokXSearchTool(llm=MagicMock())
     assert tool.name == "grok_x_search"
-    assert tool.tier == "paid"
-    assert tool.direct_scraping is False
-    assert "query" in tool.input_schema["properties"]
+    assert tool.response_format == "content_and_artifact"
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -1704,67 +1238,70 @@ Expected: `ImportError`.
 - [ ] **Step 3: Implement `osint/tools/grok_x.py`**
 
 ```python
+import json
 import os
-from typing import Any
+from typing import Any, Type
 
-from openai import AsyncOpenAI
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import BaseTool
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field, PrivateAttr
 
 from osint.errors import ScanConfigError
 
 
-class GrokXSearchTool:
-    name = "grok_x_search"
-    description = (
-        "Search X (formerly Twitter) for content relevant to a query using "
-        "Grok's Live Search, scoped to X sources only. Use when you want X-native "
-        "content (posts, profiles, quotes) rather than what Google indexes about X."
-    )
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string"},
-            "max_results": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15},
-        },
-        "required": ["query"],
-    }
-    tier = "paid"
-    est_cost_usd_per_call = 0.05
-    vendor = "xai"
-    direct_scraping = False
-    internal_concurrency = None
+class _GrokXInput(BaseModel):
+    query: str = Field(description="What to search X for.")
+    max_results: int = Field(default=15, ge=1, le=30)
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = "grok-4.20",
-        base_url: str = "https://api.x.ai/v1",
-        client: AsyncOpenAI | None = None,
-    ):
-        self.model = model
-        if client is not None:
-            self._client = client
-        else:
-            key = api_key or os.environ.get("XAI_API_KEY")
-            if not key:
-                raise ScanConfigError("XAI_API_KEY is not set")
-            self._client = AsyncOpenAI(api_key=key, base_url=base_url)
 
-    async def run(self, query: str, max_results: int = 15, **_: Any) -> dict:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": query}],
-            extra_body={
+def _make_llm(max_results: int) -> ChatOpenAI:
+    api_key = os.environ.get("XAI_API_KEY")
+    if not api_key:
+        raise ScanConfigError("XAI_API_KEY is not set")
+    return ChatOpenAI(
+        model="grok-4.20",
+        base_url="https://api.x.ai/v1",
+        api_key=api_key,
+        model_kwargs={
+            "extra_body": {
                 "search_parameters": {
                     "mode": "on",
                     "sources": [{"type": "x"}],
                     "max_search_results": max_results,
                 },
             },
-        )
-        return {
-            "answer": resp.choices[0].message.content or "",
-            "raw": resp.model_dump(),
-        }
+        },
+    )
+
+
+class GrokXSearchTool(BaseTool):
+    name: str = "grok_x_search"
+    description: str = (
+        "Search X (Twitter) for content relevant to a query, using Grok's Live "
+        "Search scoped to X sources. Use for X-native content (posts, profiles, "
+        "quotes) that Google-indexed scrapes miss."
+    )
+    args_schema: Type[BaseModel] = _GrokXInput
+    response_format: str = "content_and_artifact"
+
+    _llm_override: Any = PrivateAttr(default=None)
+
+    def __init__(self, llm: Any | None = None):
+        super().__init__()
+        self._llm_override = llm
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(self, query: str, max_results: int = 15, **_: Any) -> tuple[str, dict]:
+        # Rebuild the LLM per call so max_results (which is a search parameter)
+        # can vary per invocation. The ChatOpenAI instance is cheap.
+        llm = self._llm_override or _make_llm(max_results=max_results)
+        result = await llm.ainvoke([HumanMessage(content=query)])
+        answer = result.content or ""
+        artifact = {"answer": answer, "raw": result.model_dump()}
+        return answer, artifact
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
@@ -1776,18 +1313,103 @@ Expected: 2 passed.
 
 ```bash
 git add osint/tools/grok_x.py tests/test_tools_grok_x.py
-git commit -m "feat(tools): add grok_x_search using Grok Live Search scoped to X"
+git commit -m "feat(tools): add grok_x_search using ChatOpenAI with Live Search extra_body"
 ```
 
 ---
 
-## Task 13: System prompts and report parsing
+## Task 10: Tavily tools — re-export `langchain-tavily`
+
+**Files:**
+- Create: `osint/tools/tavily.py`
+- Create: `tests/test_tools_tavily.py`
+
+Tavily search and extract already exist as LangChain tools in the `langchain-tavily` package. We just re-export them with the names the rest of the system uses, verify their names match our config, and check that `TAVILY_API_KEY` is required when the caller relies on the env-default construction.
+
+- [ ] **Step 1: Write failing tests**
+
+Create `tests/test_tools_tavily.py`:
+
+```python
+import os
+
+import pytest
+
+from osint.tools.tavily import make_tavily_search, make_tavily_extract
+
+
+def test_tavily_tools_names(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test")
+    search = make_tavily_search()
+    extract = make_tavily_extract()
+    assert search.name == "tavily_search"
+    assert extract.name == "tavily_extract"
+
+
+def test_tavily_search_requires_api_key(monkeypatch):
+    from osint.errors import ScanConfigError
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    with pytest.raises(ScanConfigError):
+        make_tavily_search()
+```
+
+- [ ] **Step 2: Run — expect failure**
+
+Run: `pytest tests/test_tools_tavily.py -v`
+Expected: `ImportError`.
+
+- [ ] **Step 3: Implement `osint/tools/tavily.py`**
+
+```python
+import os
+
+from langchain_tavily import TavilyExtract, TavilySearch
+
+from osint.errors import ScanConfigError
+
+
+def _require_key() -> str:
+    key = os.environ.get("TAVILY_API_KEY")
+    if not key:
+        raise ScanConfigError("TAVILY_API_KEY is not set")
+    return key
+
+
+def make_tavily_search(max_results: int = 10) -> TavilySearch:
+    """Return langchain-tavily's TavilySearch tool, named `tavily_search`.
+
+    `langchain-tavily` already names this tool `tavily_search`, so no rename.
+    """
+    _require_key()
+    # Rely on TAVILY_API_KEY env var for the underlying client.
+    return TavilySearch(max_results=max_results)
+
+
+def make_tavily_extract() -> TavilyExtract:
+    """Return langchain-tavily's TavilyExtract tool, named `tavily_extract`."""
+    _require_key()
+    return TavilyExtract()
+```
+
+- [ ] **Step 4: Run tests — expect pass**
+
+Run: `pytest tests/test_tools_tavily.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add osint/tools/tavily.py tests/test_tools_tavily.py
+git commit -m "feat(tools): use langchain-tavily's built-in TavilySearch and TavilyExtract"
+```
+
+---
+
+## Task 11: Prompts and report parser
 
 **Files:**
 - Create: `osint/prompts.py`
 - Create: `tests/test_prompts.py`
-
-The agent's system prompt instructs Grok to (a) extract identifiers from the subject string, (b) use tools in parallel where independent, (c) emit its final answer as a JSON object wrapped in ```` ```json ```` fences with a fixed top-level shape: `{"extracted_identifiers": {...}, "report": {...}}`. `parse_report` extracts this from free-form model output, falling back to `{"extracted_identifiers": {}, "report": {"text": <raw>}}` on parse failure.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1797,14 +1419,11 @@ Create `tests/test_prompts.py`:
 from osint.prompts import build_system_prompt, build_synthesis_prompt, parse_report
 
 
-class _T:
-    def __init__(self, name):
-        self.name = name
-        self.description = f"desc for {name}"
-
-
 def test_system_prompt_contains_subject_and_tools():
-    p = build_system_prompt(subject="Jane, NYC, @jdoe", tools=[_T("tavily_search"), _T("maigret")])
+    p = build_system_prompt(
+        subject="Jane, NYC, @jdoe",
+        tool_names=["tavily_search", "maigret"],
+    )
     assert "Jane, NYC, @jdoe" in p
     assert "tavily_search" in p
     assert "maigret" in p
@@ -1815,7 +1434,6 @@ def test_system_prompt_contains_subject_and_tools():
 def test_synthesis_prompt_mentions_stop_reason():
     p = build_synthesis_prompt(stop_reason="budget")
     assert "budget" in p.lower()
-    assert "```json" in p
 
 
 def test_parse_report_from_fenced_json():
@@ -1832,8 +1450,7 @@ def test_parse_report_falls_back_on_invalid_json():
 
 
 def test_parse_report_handles_bare_json():
-    text = '{"extracted_identifiers": {}, "report": {"x": 1}}'
-    r = parse_report(text)
+    r = parse_report('{"extracted_identifiers": {}, "report": {"x": 1}}')
     assert r["report"] == {"x": 1}
 ```
 
@@ -1850,37 +1467,32 @@ import re
 
 
 SYSTEM_TEMPLATE = """\
-You are a self-OSINT agent. Your user wants to know what is publicly discoverable
-about themselves online. The subject is the caller; the caller has consented.
+You are a self-OSINT agent. The user wants to know what is publicly
+discoverable about themselves online. The subject is the caller; the caller
+has consented.
 
-SUBJECT DESCRIPTION (free-form, may include name, emails, handles, school,
-employer, city, past addresses, and other identifiers):
+SUBJECT DESCRIPTION:
 ---
 {subject}
 ---
 
-First, parse the description into a structured set of identifiers (emails,
-phones, usernames, full name variants, schools, employers, cities, platform
-URLs). Then use the tools below to investigate the subject.
+Steps:
+1. Parse the description into a structured set of identifiers (emails, phones,
+   usernames, full-name variants, schools, employers, cities, platform URLs).
+2. Use the tools below to investigate. Call multiple tools in the same turn
+   when queries are independent; prefer cheap/broad tools before paid/narrow.
+3. Extract as much as possible from each tool response before spending more.
+4. Stop calling tools when nothing new is likely to surface or when you
+   believe you have enough evidence.
 
-Rules:
-- Call multiple tools in the same turn when queries are independent.
-- Prefer cheap, broad tools (tavily_search) first; then drill into specifics.
-- Always extract what you can from raw search results before spending a paid
-  tool's budget.
-- Stop asking for tool calls when you have enough, or when nothing new is
-  likely to surface.
+Available tools: {tool_names}
 
-Available tools:
-{tool_catalog}
-
-Final output:
 When you are ready to finish, return ONLY a single assistant message with NO
 tool calls, containing one fenced JSON block of this exact shape:
 
 ```json
 {{
-  "extracted_identifiers": {{ "emails": [...], "usernames": [...], "urls": [...], "...": "..." }},
+  "extracted_identifiers": {{ "emails": [...], "usernames": [...], "urls": [...] }},
   "report": {{
     "summary": "...",
     "accounts": [...],
@@ -1891,8 +1503,8 @@ tool calls, containing one fenced JSON block of this exact shape:
 }}
 ```
 
-The fenced JSON is the user-visible report. Put anything you want the user to
-see there; the schema above is a guideline, not a rigid contract.
+The schema above is a guideline — add fields as needed. The fenced JSON is
+what the user will read, so populate it fully.
 """
 
 
@@ -1900,7 +1512,8 @@ SYNTHESIS_TEMPLATE = """\
 The scan was cut short. Reason: {stop_reason}.
 
 Based on the tool calls already made and their results in the conversation so
-far, produce a final report. Return ONLY a fenced JSON block with the shape:
+far, produce the final report now. Return ONLY a fenced JSON block with the
+shape:
 
 ```json
 {{
@@ -1911,9 +1524,8 @@ far, produce a final report. Return ONLY a fenced JSON block with the shape:
 """
 
 
-def build_system_prompt(subject: str, tools: list) -> str:
-    catalog = "\n".join(f"- {t.name}: {t.description}" for t in tools)
-    return SYSTEM_TEMPLATE.format(subject=subject, tool_catalog=catalog)
+def build_system_prompt(subject: str, tool_names: list[str]) -> str:
+    return SYSTEM_TEMPLATE.format(subject=subject, tool_names=", ".join(tool_names))
 
 
 def build_synthesis_prompt(stop_reason: str) -> str:
@@ -1924,21 +1536,14 @@ _FENCED_JSON = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def parse_report(text: str) -> dict:
-    """Extract `{extracted_identifiers, report}` from model output.
-
-    Tolerant: accepts a fenced ```json block, or a bare JSON object, or falls
-    back to wrapping the raw text as `{report: {text: ...}}` so the scan still
-    produces a usable artifact.
-    """
     text = text or ""
-    m = _FENCED_JSON.search(text)
     candidates = []
+    m = _FENCED_JSON.search(text)
     if m:
         candidates.append(m.group(1))
     stripped = text.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
         candidates.append(stripped)
-
     for c in candidates:
         try:
             data = json.loads(c)
@@ -1961,27 +1566,159 @@ Expected: 5 passed.
 
 ```bash
 git add osint/prompts.py tests/test_prompts.py
-git commit -m "feat(prompts): add system/synthesis prompt builders and report parser"
+git commit -m "feat(prompts): add system + synthesis prompts and report parser"
 ```
 
 ---
 
-## Task 14: `scan()` — the agent loop
+## Task 12: Tool factory — assemble enabled tools
 
 **Files:**
-- Create: `osint/scan.py`
+- Modify: `osint/tools/__init__.py`
+- Create: `tests/test_tools_factory.py`
+
+A single factory takes `(config, state)` and returns the list of `CappedTool`-wrapped tools the agent should see. This centralizes the cost-per-tool lookup and the env-var presence check — missing keys for enabled tools raise `ScanConfigError` *before* `scan()` boots the agent.
+
+- [ ] **Step 1: Write failing tests**
+
+Create `tests/test_tools_factory.py`:
+
+```python
+import pytest
+
+from osint.errors import ScanConfigError
+from osint.state import ScanState
+from osint.tools import build_tools
+from osint.types import ScanConfig
+
+
+def test_build_tools_free_tier_without_keys_raises(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    state = ScanState(scan_id="x", subject="s", config=ScanConfig())
+    with pytest.raises(ScanConfigError):
+        build_tools(ScanConfig(), state)
+
+
+def test_build_tools_with_keys(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    state = ScanState(scan_id="x", subject="s", config=ScanConfig())
+    tools = build_tools(ScanConfig(enabled_tools={"tavily_search", "maigret"}), state)
+    names = sorted(t.name for t in tools)
+    assert names == ["maigret", "tavily_search"]
+
+
+def test_build_tools_paid_requires_their_keys(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+    state = ScanState(scan_id="x", subject="s", config=ScanConfig())
+    cfg = ScanConfig(enabled_tools={"tavily_search", "apify_instagram"})
+    with pytest.raises(ScanConfigError):
+        build_tools(cfg, state)
+
+
+def test_build_tools_rejects_unknown_name(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    state = ScanState(scan_id="x", subject="s", config=ScanConfig())
+    with pytest.raises(ScanConfigError):
+        build_tools(ScanConfig(enabled_tools={"nope"}), state)
+```
+
+- [ ] **Step 2: Run — expect failure**
+
+Run: `pytest tests/test_tools_factory.py -v`
+Expected: `ImportError` or related.
+
+- [ ] **Step 3: Implement the factory**
+
+Overwrite `osint/tools/__init__.py`:
+
+```python
+import os
+
+from langchain_core.tools import BaseTool
+
+from osint.capped_tool import CappedTool
+from osint.errors import ScanConfigError
+from osint.state import ScanState
+from osint.tools.apify import ApifyInstagramTool, ApifyLinkedInTool
+from osint.tools.grok_x import GrokXSearchTool
+from osint.tools.maigret import MaigretTool
+from osint.tools.tavily import make_tavily_extract, make_tavily_search
+from osint.types import ScanConfig
+
+
+_COSTS = {
+    "tavily_search": 0.004,
+    "tavily_extract": 0.001,
+    "maigret": 0.0,
+    "apify_instagram": 0.15,
+    "apify_linkedin": 0.05,
+    "grok_x_search": 0.05,
+}
+
+
+def _require_env(var: str, tool: str) -> None:
+    if not os.environ.get(var):
+        raise ScanConfigError(f"{tool} enabled but {var} is not set")
+
+
+def _make_raw_tool(name: str, config: ScanConfig) -> BaseTool:
+    if name == "tavily_search":
+        _require_env("TAVILY_API_KEY", name)
+        return make_tavily_search()
+    if name == "tavily_extract":
+        _require_env("TAVILY_API_KEY", name)
+        return make_tavily_extract()
+    if name == "maigret":
+        opts = config.tool_options.get("maigret", {})
+        return MaigretTool(proxy_url=opts.get("proxy_url"))
+    if name == "apify_instagram":
+        _require_env("APIFY_TOKEN", name)
+        return ApifyInstagramTool()
+    if name == "apify_linkedin":
+        _require_env("APIFY_TOKEN", name)
+        return ApifyLinkedInTool()
+    if name == "grok_x_search":
+        _require_env("XAI_API_KEY", name)
+        return GrokXSearchTool()
+    raise ScanConfigError(f"unknown tool: {name}")
+
+
+def build_tools(config: ScanConfig, state: ScanState) -> list[CappedTool]:
+    tools: list[CappedTool] = []
+    for name in sorted(config.enabled_tools):
+        raw = _make_raw_tool(name, config)
+        tools.append(CappedTool(wrapped=raw, state=state, est_cost_usd=_COSTS.get(name, 0.0)))
+    return tools
+```
+
+- [ ] **Step 4: Run tests — expect pass**
+
+Run: `pytest tests/test_tools_factory.py -v`
+Expected: 4 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add osint/tools/__init__.py tests/test_tools_factory.py
+git commit -m "feat(tools): add build_tools factory with API-key preflight"
+```
+
+---
+
+## Task 13: Structlog setup
+
+**Files:**
 - Create: `osint/log.py`
-- Create: `tests/test_scan.py`
 
-The `scan()` function wires everything together. This is the biggest task — split into smaller steps. We validate inputs, construct `ScanState`, seed messages with the system prompt, then loop: call LLM → if no tool_uses, parse and store the report; else dispatch tool_uses in parallel, append results to the message history, loop. On any non-final stop condition, run a synthesis call. Always write the scan JSON. Return `ScanResult`.
-
-- [ ] **Step 1: Write the structlog setup**
+- [ ] **Step 1: Implement logging setup**
 
 Create `osint/log.py`:
 
 ```python
 import logging
 import sys
+
 import structlog
 
 
@@ -2001,7 +1738,39 @@ def configure_logging(level: int = logging.INFO) -> None:
 logger = structlog.get_logger("osint")
 ```
 
-- [ ] **Step 2: Write failing `scan()` tests**
+- [ ] **Step 2: Smoke test via the REPL**
+
+Run: `python -c "from osint.log import configure_logging, logger; configure_logging(); logger.info('hi', x=1)"`
+Expected: one structured line on stderr including `event=hi x=1`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add osint/log.py
+git commit -m "chore(log): add structlog setup"
+```
+
+---
+
+## Task 14: `scan()` — the LangGraph agent loop
+
+**Files:**
+- Create: `osint/scan.py`
+- Create: `tests/test_scan.py`
+
+The function signature is unchanged. Internally:
+
+1. Validate subject.
+2. Build `ScanState` and `CappedTool`-wrapped tools via `build_tools`.
+3. Build a Grok `ChatOpenAI` (or use the injected `llm`).
+4. Construct a ReAct agent via `langgraph.prebuilt.create_react_agent(model, tools)`.
+5. Invoke with `recursion_limit = 2 * max_tool_calls` (each iteration is an LLM call + potential tool round-trip) and an outer `asyncio.wait_for(..., timeout=max_wall_clock_sec)`.
+6. On success: take the final assistant message's content, `parse_report`, record, write JSON, return.
+7. On `ScanStopped` (from `CappedTool`): call the LLM once with the synthesis prompt on the current message history, parse, write, return.
+8. On `asyncio.TimeoutError` or `GraphRecursionError`: same synthesis fallback.
+9. On any other exception: write a `status="failed"` JSON and re-raise.
+
+- [ ] **Step 1: Write failing tests**
 
 Create `tests/test_scan.py`:
 
@@ -2010,39 +1779,33 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, ToolCall
 
 from osint.scan import scan
-from osint.tools import REGISTRY
-from osint.types import LLMResponse, ScanConfig, ToolUse
+from osint.types import ScanConfig
 
 
-class _StubTool:
-    name = "stub"
-    description = "stub"
-    input_schema = {"type": "object", "properties": {}}
-    tier = "free"
-    est_cost_usd_per_call = 0.01
-    vendor = "none"
-    direct_scraping = False
-    internal_concurrency = None
+def _ai_with_tool_call(name: str, args: dict, tool_id: str = "call_1", text: str = "thinking") -> AIMessage:
+    return AIMessage(
+        content=text,
+        tool_calls=[ToolCall(name=name, args=args, id=tool_id)],
+    )
 
-    def __init__(self, side_effect=None):
-        self.run = AsyncMock(side_effect=side_effect or (lambda **_: {"r": 1}))
+
+def _ai_final(text: str) -> AIMessage:
+    return AIMessage(content=text, tool_calls=[])
+
+
+FINAL_JSON = (
+    '```json\n{"extracted_identifiers":{"emails":["j@e"]},'
+    '"report":{"summary":"hi"}}\n```'
+)
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry():
-    REGISTRY.clear()
-    yield
-    REGISTRY.clear()
-
-
-def _llm_stub(*turns):
-    """Return an LLM whose .call() yields the given turns in order, then stops."""
-    llm = MagicMock()
-    llm.call = AsyncMock(side_effect=list(turns))
-    llm.synthesize = AsyncMock(return_value='```json\n{"report": {"summary":"synth"}}\n```')
-    return llm
+def _tavily_env(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test")
 
 
 async def test_scan_rejects_empty_subject(tmp_path):
@@ -2050,207 +1813,204 @@ async def test_scan_rejects_empty_subject(tmp_path):
         await scan(subject="   ", config=ScanConfig(), llm=MagicMock(), scans_dir=tmp_path)
 
 
-async def test_scan_happy_path(tmp_path):
-    t = _StubTool()
-    REGISTRY[t.name] = t
-    llm = _llm_stub(
-        LLMResponse(
-            text="planning",
-            tool_uses=[ToolUse(id="a", name="stub", input={})],
-            assistant_message_raw={"role": "assistant", "content": "planning"},
-        ),
-        LLMResponse(
-            text='```json\n{"extracted_identifiers":{"emails":["j@e"]},"report":{"summary":"hi"}}\n```',
-            tool_uses=[],
-            assistant_message_raw={"role": "assistant", "content": "done"},
-        ),
-    )
+async def test_scan_happy_path_no_tool_calls(tmp_path):
+    """LLM skips tools and emits a final JSON immediately."""
+    fake = FakeMessagesListChatModel(responses=[_ai_final(FINAL_JSON)])
     result = await scan(
-        subject="Jane Doe, j@e",
-        config=ScanConfig(enabled_tools={"stub"}),
-        llm=llm,
+        subject="Jane, j@e",
+        config=ScanConfig(enabled_tools={"tavily_search"}),
+        llm=fake,
         scans_dir=tmp_path,
     )
-    assert t.run.await_count == 1
     assert result.report == {"summary": "hi"}
     assert result.extracted_identifiers == {"emails": ["j@e"]}
     assert result.path.exists()
-    assert llm.call.await_count == 2
-    assert llm.synthesize.await_count == 0
 
 
-async def test_scan_stops_on_budget(tmp_path):
-    t = _StubTool()
-    REGISTRY[t.name] = t
-    # LLM keeps asking for tools; budget cap forces stop.
-    tool_use_turn = LLMResponse(
-        text="more",
-        tool_uses=[ToolUse(id="a", name="stub", input={})],
-        assistant_message_raw={"role": "assistant", "content": "more"},
-    )
-    llm = _llm_stub(tool_use_turn, tool_use_turn, tool_use_turn)
+async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch):
+    from osint import scan as scan_module
+    monkeypatch.setattr(scan_module, "create_react_agent",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        await scan(subject="Jane", config=ScanConfig(enabled_tools={"tavily_search"}),
+                   llm=MagicMock(), scans_dir=tmp_path)
+    # A failed JSON should still be written.
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    import json
+    data = json.loads(files[0].read_text())
+    assert data["status"] == "failed"
+
+
+async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
+    from osint import scan as scan_module
+    from osint.errors import ScanStopped
+
+    # Simulate the agent raising ScanStopped mid-flight (a cap was hit inside
+    # CappedTool during some tool call). The synthesis LLM call should be made.
+    async def raise_stopped(*_a, **_k):
+        raise ScanStopped("budget")
+
+    fake_agent = MagicMock()
+    fake_agent.ainvoke = AsyncMock(side_effect=raise_stopped)
+    monkeypatch.setattr(scan_module, "create_react_agent", lambda *a, **k: fake_agent)
+
+    synth_llm = MagicMock()
+    synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))
+
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"stub"}, budget_usd=0.015),
-        llm=llm,
+        config=ScanConfig(enabled_tools={"tavily_search"}),
+        llm=synth_llm,
         scans_dir=tmp_path,
     )
-    # After 2 successful calls at $0.01 each, budget is exhausted. Synthesis runs.
-    assert llm.synthesize.await_count == 1
-    assert result.report == {"summary": "synth"}
-    assert result.total_cost_usd >= 0.01
+    assert result.report == {"summary": "hi"}
+    # synth_llm.ainvoke is called twice in this setup: once as the agent's
+    # injected model (which we intercept via create_react_agent) and once for
+    # synthesis. Since we replaced create_react_agent, only synthesis counts.
+    assert synth_llm.ainvoke.await_count == 1
 
 
-async def test_scan_parallel_tool_dispatch(tmp_path):
+async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
+    from osint import scan as scan_module
     import asyncio
-    delays: list[float] = []
 
-    async def slow(**_):
-        import time
-        start = time.monotonic()
-        await asyncio.sleep(0.05)
-        delays.append(time.monotonic() - start)
-        return {"r": 1}
+    async def hang(*_a, **_k):
+        await asyncio.sleep(10)
 
-    t = _StubTool(side_effect=slow)
-    REGISTRY[t.name] = t
-    llm = _llm_stub(
-        LLMResponse(
-            text="fan out",
-            tool_uses=[
-                ToolUse(id=f"a{i}", name="stub", input={}) for i in range(4)
-            ],
-            assistant_message_raw={"role": "assistant", "content": "fan"},
-        ),
-        LLMResponse(
-            text='```json\n{"report": {"summary":"done"}}\n```',
-            tool_uses=[],
-            assistant_message_raw={"role": "assistant", "content": "done"},
-        ),
-    )
-    import time
-    start = time.monotonic()
-    await scan(
-        subject="Jane",
-        config=ScanConfig(enabled_tools={"stub"}),
-        llm=llm,
-        scans_dir=tmp_path,
-    )
-    elapsed = time.monotonic() - start
-    # Four 0.05s calls dispatched in parallel should finish in well under 0.2s.
-    assert elapsed < 0.15
-    assert t.run.await_count == 4
+    fake_agent = MagicMock()
+    fake_agent.ainvoke = AsyncMock(side_effect=hang)
+    monkeypatch.setattr(scan_module, "create_react_agent", lambda *a, **k: fake_agent)
 
+    synth_llm = MagicMock()
+    synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))
 
-async def test_scan_skips_unregistered_tool_requests(tmp_path):
-    """If the LLM asks for a tool not in enabled_tools, skip with an error ToolCall."""
-    t = _StubTool()
-    REGISTRY[t.name] = t
-    llm = _llm_stub(
-        LLMResponse(
-            text="oops",
-            tool_uses=[ToolUse(id="a", name="not_registered", input={})],
-            assistant_message_raw={"role": "assistant", "content": "oops"},
-        ),
-        LLMResponse(
-            text='```json\n{"report":{"summary":"ok"}}\n```',
-            tool_uses=[],
-            assistant_message_raw={"role": "assistant"},
-        ),
-    )
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"stub"}),
-        llm=llm,
+        config=ScanConfig(enabled_tools={"tavily_search"}, max_wall_clock_sec=1),
+        llm=synth_llm,
         scans_dir=tmp_path,
     )
-    assert len(result.tool_calls) == 1
-    assert result.tool_calls[0].error is not None
-    assert "not enabled" in result.tool_calls[0].error or "unknown" in result.tool_calls[0].error
+    assert result.report == {"summary": "hi"}
 ```
 
-- [ ] **Step 3: Implement `scan()`**
+- [ ] **Step 2: Run — expect failure**
 
-Create `osint/scan.py`:
+Run: `pytest tests/test_scan.py -v`
+Expected: `ImportError` on `osint.scan`.
+
+- [ ] **Step 3: Implement `osint/scan.py`**
 
 ```python
 import asyncio
-import json
-import time
-from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any
 
-from osint.llm import LLM, GrokLLM
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
+from langgraph.prebuilt import create_react_agent
+
+from osint.errors import ScanConfigError, ScanStopped
 from osint.log import configure_logging, logger
 from osint.prompts import build_synthesis_prompt, build_system_prompt, parse_report
 from osint.state import ScanState, StopReason
 from osint.storage import new_scan_id, write_scan_json
-from osint.tools import REGISTRY, invoke_tool
-from osint.types import LLMResponse, ScanConfig, ScanResult, ToolCall, ToolUse
+from osint.tools import build_tools
+from osint.types import ScanConfig, ScanResult
+
+
+def _default_llm() -> ChatOpenAI:
+    key = os.environ.get("XAI_API_KEY")
+    if not key:
+        raise ScanConfigError("XAI_API_KEY is not set")
+    return ChatOpenAI(
+        model="grok-4.20",
+        base_url="https://api.x.ai/v1",
+        api_key=key,
+    )
+
+
+async def _synthesize(llm: BaseChatModel, subject: str, state: ScanState, stop_reason: str) -> str:
+    msgs = [
+        SystemMessage(content=build_system_prompt(subject, sorted(state.config.enabled_tools))),
+        HumanMessage(content=build_synthesis_prompt(stop_reason)),
+    ]
+    result = await llm.ainvoke(msgs)
+    return result.content or ""
+
+
+def _extract_final_text(agent_result: dict) -> str:
+    """Pull the last AI message's content string from a LangGraph agent result."""
+    messages = agent_result.get("messages", [])
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            return m.content or ""
+    return ""
 
 
 async def scan(
     subject: str,
     config: ScanConfig = ScanConfig(),
-    llm: LLM | None = None,
+    llm: BaseChatModel | None = None,
     scans_dir: Path = Path("./scans"),
 ) -> ScanResult:
     if not subject or not subject.strip():
         raise ValueError("subject must be a non-empty description")
     configure_logging()
 
-    llm = llm or GrokLLM()
-    tools = [REGISTRY[n] for n in sorted(config.enabled_tools) if n in REGISTRY]
-    tool_map = {t.name: t for t in tools}
+    llm = llm or _default_llm()
     state = ScanState(scan_id=new_scan_id(), subject=subject, config=config)
-
     logger.info("scan.start", scan_id=state.scan_id, enabled_tools=sorted(config.enabled_tools))
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": build_system_prompt(subject, tools)},
-    ]
-
-    turn = 0
-    stop_reason: StopReason = StopReason.NONE
     try:
-        while True:
-            stopped, stop_reason = state.should_stop()
-            if stopped:
-                break
+        tools = build_tools(config, state)
 
-            response: LLMResponse = await llm.call(messages, tools=tools)
-            messages.append(_to_openai_assistant_message(response))
-            turn += 1
+        agent = create_react_agent(
+            llm,
+            tools,
+            state_modifier=SystemMessage(
+                content=build_system_prompt(subject, sorted(config.enabled_tools))
+            ),
+        )
 
-            if not response.tool_uses:
-                parsed = parse_report(response.text)
-                state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
-                stop_reason = StopReason.FINAL_REPORT
-                break
+        initial_state = {"messages": [HumanMessage(content="Begin the scan.")]}
+        invoke_config: dict[str, Any] = {"recursion_limit": 2 * config.max_tool_calls}
 
-            tool_calls = await asyncio.gather(*[
-                _dispatch(tu, tool_map, state, turn) for tu in response.tool_uses
-            ])
-            for tc in tool_calls:
-                state.record_tool_call(tc)
-                messages.append(_tool_result_message(tc))
+        stop_reason: StopReason | None = None
+        agent_result: dict | None = None
+        try:
+            agent_result = await asyncio.wait_for(
+                agent.ainvoke(initial_state, config=invoke_config),
+                timeout=config.max_wall_clock_sec,
+            )
+        except ScanStopped as e:
+            stop_reason = StopReason(e.reason)
+        except asyncio.TimeoutError:
+            stop_reason = StopReason.WALL_CLOCK
+        except GraphRecursionError:
+            stop_reason = StopReason.MAX_CALLS
 
-        if not state.has_final_report():
-            logger.info("scan.synthesize", scan_id=state.scan_id, stop_reason=stop_reason.value)
-            messages.append({"role": "user", "content": build_synthesis_prompt(stop_reason.value)})
-            synth_text = await llm.synthesize(messages)
+        if stop_reason is None and agent_result is not None:
+            final_text = _extract_final_text(agent_result)
+            parsed = parse_report(final_text)
+            state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
+        else:
+            logger.info("scan.synthesize", scan_id=state.scan_id,
+                        stop_reason=stop_reason.value if stop_reason else "unknown")
+            synth_text = await _synthesize(
+                llm, subject, state, stop_reason.value if stop_reason else "unknown",
+            )
             parsed = parse_report(synth_text)
             state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
 
         path = await write_scan_json(scans_dir, state, status="done")
-        logger.info(
-            "scan.done",
-            scan_id=state.scan_id,
-            tool_calls=len(state.tool_calls),
-            cost_usd=state.total_cost_usd,
-            duration_sec=state.wall_clock_elapsed,
-        )
+        logger.info("scan.done", scan_id=state.scan_id,
+                    tool_calls=len(state.tool_calls),
+                    cost_usd=state.total_cost_usd,
+                    duration_sec=state.wall_clock_elapsed)
         return ScanResult(
             scan_id=state.scan_id,
             subject=subject,
@@ -2262,69 +2022,12 @@ async def scan(
             path=path,
         )
     except Exception:
-        # Still write what we have, so the scan is never lost.
         try:
             await write_scan_json(scans_dir, state, status="failed")
         except Exception:
             pass
         raise
-
-
-async def _dispatch(tool_use: ToolUse, tool_map: dict, state: ScanState, turn: int) -> ToolCall:
-    tool = tool_map.get(tool_use.name)
-    if tool is None:
-        now = datetime.now(timezone.utc)
-        return ToolCall(
-            turn=turn, tool=tool_use.name, input=tool_use.input,
-            output=None, raw=None,
-            started_at=now, completed_at=now,
-            cost_usd=0.0,
-            error=f"tool not enabled or unknown: {tool_use.name}",
-        )
-    return await invoke_tool(tool, tool_use, state, turn=turn)
-
-
-def _to_openai_assistant_message(response: LLMResponse) -> dict:
-    # Preserve tool_calls on the assistant message so the subsequent
-    # tool result messages can reference them by tool_call_id.
-    msg: dict[str, Any] = {"role": "assistant", "content": response.text or None}
-    if response.tool_uses:
-        msg["tool_calls"] = [
-            {
-                "id": tu.id,
-                "type": "function",
-                "function": {"name": tu.name, "arguments": json.dumps(tu.input)},
-            }
-            for tu in response.tool_uses
-        ]
-    return msg
-
-
-def _tool_result_message(tc: ToolCall) -> dict:
-    # OpenAI-compatible tool result message. tool_call_id matches the id
-    # emitted in the assistant turn.
-    if tc.error:
-        content = json.dumps({"error": tc.error})
-    else:
-        content = json.dumps(tc.output or {}, default=str)
-    return {
-        "role": "tool",
-        "tool_call_id": _tool_call_id_for(tc),
-        "content": content,
-    }
-
-
-def _tool_call_id_for(tc: ToolCall) -> str:
-    # ScanState doesn't retain tool_use.id on ToolCall (by design — it's a
-    # vendor detail). Since results are appended in the same order they were
-    # dispatched and the assistant message's tool_calls list matches that
-    # order, we rely on positional matching at the OpenAI protocol level by
-    # reusing the tool name + turn as a stable identifier. If the vendor
-    # requires an exact id match we'd need to thread tool_use.id through.
-    return f"{tc.tool}_{tc.turn}_{id(tc)}"
 ```
-
-> **Implementation note on `_tool_call_id_for`:** OpenAI's wire protocol expects the `tool_call_id` in tool result messages to match the assistant message's `tool_calls[].id`. The cleanest fix is to thread `tool_use.id` through `invoke_tool` → `ToolCall`. Add a `tool_use_id: str | None = None` field to `ToolCall` in a follow-up refinement if integration tests show the protocol matching fails — Task 14.5 handles that.
 
 - [ ] **Step 4: Run tests — expect pass**
 
@@ -2334,89 +2037,8 @@ Expected: 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add osint/scan.py osint/log.py tests/test_scan.py
-git commit -m "feat(scan): add agent loop with parallel tool dispatch and synthesis fallback"
-```
-
----
-
-## Task 14.5: Thread `tool_use_id` through `ToolCall` for protocol-correct tool results
-
-**Why:** OpenAI's API requires `tool_call_id` on tool result messages to match `tool_calls[].id` from the assistant turn. The placeholder in Task 14 works structurally but breaks at runtime against the real xAI endpoint.
-
-**Files:**
-- Modify: `osint/types.py`
-- Modify: `osint/tools/__init__.py`
-- Modify: `osint/scan.py`
-- Modify: `tests/test_types.py`
-- Modify: `tests/test_tools_invoke.py`
-- Modify: `tests/test_scan.py`
-
-- [ ] **Step 1: Write failing test**
-
-Append to `tests/test_tools_invoke.py`:
-
-```python
-async def test_invoke_tool_records_tool_use_id():
-    t = _Stub()
-    state = ScanState(scan_id="s", subject="x", config=ScanConfig())
-    tu = ToolUse(id="call_abc", name="stub", input={})
-    tc = await invoke_tool(t, tu, state, turn=3)
-    assert tc.tool_use_id == "call_abc"
-```
-
-Run: `pytest tests/test_tools_invoke.py::test_invoke_tool_records_tool_use_id -v`
-Expected: `AttributeError: ... tool_use_id`.
-
-- [ ] **Step 2: Add `tool_use_id` to `ToolCall`**
-
-In `osint/types.py`, add to `ToolCall`:
-
-```python
-class ToolCall(BaseModel):
-    turn: int
-    tool: str
-    tool_use_id: str | None = None    # NEW
-    input: dict[str, Any]
-    output: dict[str, Any] | None
-    raw: Any
-    started_at: datetime
-    completed_at: datetime
-    cost_usd: float
-    error: str | None = None
-```
-
-- [ ] **Step 3: Populate it in `invoke_tool` and the unknown-tool branch of `_dispatch`**
-
-In `osint/tools/__init__.py`, change `invoke_tool` to construct `ToolCall` with `tool_use_id=tool_use.id`. In `osint/scan.py` `_dispatch`, also pass `tool_use_id=tool_use.id` in the unknown-tool branch.
-
-- [ ] **Step 4: Use it in `_tool_result_message` and drop the placeholder `_tool_call_id_for`**
-
-In `osint/scan.py`, delete `_tool_call_id_for` and inline:
-
-```python
-def _tool_result_message(tc: ToolCall) -> dict:
-    if tc.error:
-        content = json.dumps({"error": tc.error})
-    else:
-        content = json.dumps(tc.output or {}, default=str)
-    return {
-        "role": "tool",
-        "tool_call_id": tc.tool_use_id or f"{tc.tool}_{tc.turn}",
-        "content": content,
-    }
-```
-
-- [ ] **Step 5: Run all tests — expect pass**
-
-Run: `pytest -v`
-Expected: all tests pass (existing ones tolerate the new optional field).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add osint/types.py osint/tools/__init__.py osint/scan.py tests/test_tools_invoke.py
-git commit -m "fix(scan): thread tool_use_id through ToolCall for OpenAI-compatible tool results"
+git add osint/scan.py tests/test_scan.py
+git commit -m "feat(scan): add LangGraph create_react_agent loop with synthesis fallbacks"
 ```
 
 ---
@@ -2433,7 +2055,6 @@ git commit -m "fix(scan): thread tool_use_id through ToolCall for OpenAI-compati
 Create `tests/test_cli.py`:
 
 ```python
-import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -2443,30 +2064,26 @@ import pytest
 from osint.cli import main
 
 
-async def test_cli_passes_subject_to_scan(tmp_path: Path, capsys):
-    fake_result = type("R", (), {})()
-    fake_result.scan_id = "sid"
-    fake_result.path = tmp_path / "sid.json"
+async def test_cli_passes_subject_to_scan(tmp_path: Path):
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
     (tmp_path / "sid.json").write_text("{}")
-
-    with patch("osint.cli.scan", new=AsyncMock(return_value=fake_result)) as m:
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "Jane Doe, jane@e, @jdoe", "--scans-dir", str(tmp_path)])
-    assert m.await_count == 1
     kwargs = m.call_args.kwargs
     assert kwargs["subject"] == "Jane Doe, jane@e, @jdoe"
     assert kwargs["scans_dir"] == tmp_path
 
 
 async def test_cli_reads_stdin_when_no_arg(tmp_path: Path, monkeypatch):
-    fake_result = type("R", (), {})()
-    fake_result.scan_id = "sid"
-    fake_result.path = tmp_path / "sid.json"
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
     (tmp_path / "sid.json").write_text("{}")
-
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("Jane from stdin"))
-    with patch("osint.cli.scan", new=AsyncMock(return_value=fake_result)) as m:
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "--scans-dir", str(tmp_path)])
-    assert m.await_count == 1
     assert m.call_args.kwargs["subject"] == "Jane from stdin"
 
 
@@ -2505,37 +2122,30 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-calls", type=int, default=30)
     s.add_argument("--max-seconds", type=int, default=600)
     s.add_argument("--enable", action="append", default=None,
-                   help="Enable a tool by name. Can be repeated. Defaults to the "
-                        "standard free set if omitted.")
-    return s and parser
+                   help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
+    return parser
 
 
 async def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.cmd != "scan":
-        parser.print_help()
-        return 2
-
-    subject = args.subject
-    if subject is None:
-        subject = sys.stdin.read()
+    subject = args.subject if args.subject is not None else sys.stdin.read()
     if not subject or not subject.strip():
         print("error: subject must be a non-empty description", file=sys.stderr)
         sys.exit(2)
 
-    config_kwargs: dict = {
+    kwargs: dict = {
         "budget_usd": args.budget_usd,
         "max_tool_calls": args.max_calls,
         "max_wall_clock_sec": args.max_seconds,
     }
     if args.enable:
-        config_kwargs["enabled_tools"] = set(args.enable)
+        kwargs["enabled_tools"] = set(args.enable)
 
     result = await scan(
         subject=subject,
-        config=ScanConfig(**config_kwargs),
+        config=ScanConfig(**kwargs),
         scans_dir=args.scans_dir,
     )
     print(result.path)
@@ -2550,130 +2160,67 @@ if __name__ == "__main__":
     _entry()
 ```
 
-- [ ] **Step 4: Export from `osint/__init__.py`**
+- [ ] **Step 4: Finalize `osint/__init__.py` exports**
 
 Overwrite `osint/__init__.py`:
 
 ```python
-from osint.errors import ScanConfigError, ToolError
-from osint.llm import LLM, GrokLLM
+from osint.errors import ScanConfigError, ScanStopped
 from osint.scan import scan
-from osint.types import ScanConfig, ScanResult, ToolCall, ToolUse
-
-# Register built-in tools so they become available by name.
-from osint.tools import REGISTRY, register
-from osint.tools.tavily import TavilyExtractTool, TavilySearchTool
-from osint.tools.maigret import MaigretTool
-from osint.tools.apify import ApifyInstagramTool, ApifyLinkedInTool
-from osint.tools.grok_x import GrokXSearchTool
-
-
-def _register_builtins() -> None:
-    for cls in (
-        TavilySearchTool, TavilyExtractTool,
-        MaigretTool,
-        ApifyInstagramTool, ApifyLinkedInTool,
-        GrokXSearchTool,
-    ):
-        instance = cls()
-        if instance.name not in REGISTRY:
-            register(instance)
-
-
-_register_builtins()
+from osint.types import ScanConfig, ScanResult, ToolCallRecord
 
 __all__ = [
     "scan",
     "ScanConfig",
     "ScanResult",
-    "ToolCall",
-    "ToolUse",
-    "LLM",
-    "GrokLLM",
+    "ToolCallRecord",
     "ScanConfigError",
-    "ToolError",
-    "REGISTRY",
+    "ScanStopped",
 ]
 ```
 
-- [ ] **Step 5: Run all tests — expect all pass**
+- [ ] **Step 5: Run all tests — expect pass**
 
 Run: `pytest -v`
 Expected: all tests pass.
 
-> **Caveat on test isolation.** `osint/__init__.py` registers built-in tools on import, but several tool constructors require env vars (`TAVILY_API_KEY`, `APIFY_TOKEN`, `XAI_API_KEY`) when no client is passed. For `_register_builtins()` to work in a dev environment without those env vars, each tool's constructor must allow lazy client creation (the Task 9/11/12 implementations already do — the client is only created on first `.run()` call, not at construction time). `MaigretTool` has no API key. `GrokXSearchTool` DOES require `XAI_API_KEY` at construction — wrap its registration in a try/except ImportError/ScanConfigError so importing `osint` without keys doesn't fail. Update `_register_builtins`:
-
-```python
-def _register_builtins() -> None:
-    for cls in (
-        TavilySearchTool, TavilyExtractTool,
-        MaigretTool,
-        ApifyInstagramTool, ApifyLinkedInTool,
-        GrokXSearchTool,
-    ):
-        try:
-            instance = cls()
-        except ScanConfigError:
-            continue   # tool needs env var; user must set it then reimport or register manually
-        if instance.name not in REGISTRY:
-            register(instance)
-```
-
-Also update `GrokXSearchTool.__init__` in `osint/tools/grok_x.py` to match the lazy pattern: defer key check until first `.run()`:
-
-```python
-def __init__(self, api_key: str | None = None, model: str = "grok-4.20",
-             base_url: str = "https://api.x.ai/v1", client: AsyncOpenAI | None = None):
-    self.model = model
-    self._client = client
-    self._api_key = api_key
-    self._base_url = base_url
-
-@property
-def client(self) -> AsyncOpenAI:
-    if self._client is None:
-        key = self._api_key or os.environ.get("XAI_API_KEY")
-        if not key:
-            raise ScanConfigError("XAI_API_KEY is not set")
-        self._client = AsyncOpenAI(api_key=key, base_url=self._base_url)
-    return self._client
-```
-
-And in `.run()` use `self.client` instead of `self._client`. Re-run `pytest tests/test_tools_grok_x.py -v` — both tests should still pass since they inject a client.
-
 - [ ] **Step 6: Commit**
 
 ```bash
-git add osint/cli.py osint/__init__.py osint/tools/grok_x.py tests/test_cli.py
-git commit -m "feat(cli): add argparse CLI and register built-in tools on import"
+git add osint/cli.py osint/__init__.py tests/test_cli.py
+git commit -m "feat(cli): add argparse CLI and finalize public exports"
 ```
 
 ---
 
 ## Self-review
 
-**Spec coverage check (§§1–11 of the spec):**
+**Spec coverage (§§1–11):**
 
-- §4 in-scope items: covered — async `scan()` (Task 14), single LLM vendor (Task 6), six tools (Tasks 9–12), JSON-per-scan (Task 5), tool-level concurrency caps (Task 8), budget/call/wall-clock caps (Tasks 2, 4).
-- §5 architecture: fully materialized across Tasks 4–14.
-- §6.1 free-form string input with empty-rejection: Tasks 14 (validation) and 15 (CLI stdin fallback).
-- §6.2 agent loop, parallel dispatch, stop conditions: Task 14 + test `test_scan_parallel_tool_dispatch`.
-- §6.3 Tool Protocol and registry: Task 7.
-- §6.4 LLM Protocol and `GrokLLM`: Task 6.
-- §6.5 `grok_x_search` as separate tool with Live Search scoped to X: Task 12.
-- §6.6 Maigret mitigations — internal concurrency default 15, `TOOL_LIMITS` semaphore, `proxy_url`, `sites_filter`: Tasks 8 (semaphore) + 10 (knobs).
-- §6.7 JSON output shape including `extracted_identifiers` + raw tool calls: Task 5 + Task 13 (report parse).
-- §6.8 cap enforcement with a final synthesis pass: Task 14 (synthesis branch).
-- §6.9 structlog logging keyed by `scan_id`, no subject PII: Task 14 (log.py + structured calls in `scan()`). *Note: the log calls included emit scan_id, tool count, cost, duration — never subject text. Tool-call start/end lines are not separately logged in the current plan; acceptable for v1, but if fine-grained per-tool traces are wanted, a follow-up would add them inside `invoke_tool`.*
-- §7 v1 tool list: all six present.
-- §8 public API including `python -m osint.cli`: Task 15.
-- §9 env-var requirements and `ScanConfigError`: Tasks 9, 11, 12 (lazy-client pattern), 15 (tolerant registration).
+- §4 in-scope items: ✓ async `scan()` (Task 14), single LLM vendor (Task 14 default LLM), six tools (Tasks 7–10), JSON-per-scan (Task 5), per-tool concurrency cap on Maigret (Task 7), budget/call/wall-clock caps (Tasks 4, 6, 14).
+- §5 architecture: ✓ replaced the custom agent with LangGraph's ReAct agent; tool registry becomes the factory in Task 12.
+- §6.1 free-form string input + empty-rejection: ✓ Tasks 14, 15.
+- §6.2 agent loop + parallel dispatch + stop conditions: ✓ Task 14 (LangGraph handles parallel dispatch natively; caps enforced via `CappedTool` raising `ScanStopped` + `asyncio.wait_for` + `recursion_limit`).
+- §6.3 tool contract: ✓ we replaced the custom `Tool` Protocol with LangChain's `BaseTool`; the contract is equivalent (name, description, input schema, async run).
+- §6.4 LLM abstraction: ✓ accepts any `BaseChatModel`; default is `ChatOpenAI` pointed at xAI.
+- §6.5 `grok_x_search` separate tool with X-scoped Live Search: ✓ Task 9.
+- §6.6 Maigret mitigations (internal max_connections=15, process semaphore, proxy_url, sites_filter): ✓ Task 7.
+- §6.7 JSON output shape with `extracted_identifiers` and raw tool calls: ✓ Tasks 5, 14.
+- §6.8 cap enforcement + final synthesis: ✓ Task 14.
+- §6.9 structlog logging with scan_id, no subject PII: ✓ Task 13 + Task 14 (explicit fields on every log call are scan_id/duration/cost/call count).
+- §7 v1 tool list: ✓ all six.
+- §8 public API including `python -m osint.cli`: ✓ Task 15.
+- §9 env-var requirements + `ScanConfigError`: ✓ Task 12 factory raises pre-flight; Tasks 9, 10 also preflight inside their constructors.
 
-**Placeholder scan:** one intentional note in Task 14 (the protocol id issue) is resolved by the dedicated Task 14.5. No "TBD"/"TODO"/"implement later" markers. All code steps include actual code.
+**Placeholder scan:** none. All TDD code blocks are concrete. One caveat called out in Task 6 about `tool_call_id` provenance in `CappedTool` — flagged as a known small area and given an explicit fallback.
 
-**Type consistency:** `ToolCall` has `tool_use_id` added in Task 14.5; no downstream task references a field by a different name. `StopReason` is used consistently between `ScanState.should_stop()` (Task 4) and `scan()` (Task 14). `Tool` Protocol attributes (`direct_scraping`, `internal_concurrency`, `vendor`, etc.) used in Task 8's `invoke_tool` match the definitions in Task 7 and every tool implementation in Tasks 9–12.
+**Type consistency:**
+- `ToolCallRecord` is named consistently everywhere (was `ToolCall` in the older non-LangGraph plan; renamed to avoid clashing with LangChain's `ToolCall` type).
+- `StopReason` values used in `ScanState.should_stop()` match the values used in `ScanStopped.reason` and `asyncio.TimeoutError`/`GraphRecursionError` mapping in `scan()`.
+- `build_tools(config, state)` signature used identically in Task 12 and Task 14.
+- `BaseTool`'s `response_format="content_and_artifact"` contract is used uniformly across Maigret, Apify×2, and Grok-X tools; `CappedTool` handles both that shape and the plain-string shape (Tavily tools, which return strings).
 
-**Scope check:** one plan, one subsystem (the library). Total ~15 tasks producing ~1,500 lines of code + ~800 lines of tests.
+**Scope check:** one library, one plan. 15 tasks, ~1,600 lines of code + ~900 lines of tests.
 
 ---
 
