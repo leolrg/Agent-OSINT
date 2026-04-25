@@ -7,6 +7,39 @@ import pytest
 from osint.cli import main
 
 
+# Tests run from the repo root, where the developer's real .env lives. The
+# CLI's main() calls `load_dotenv()` which would read that file into
+# os.environ — leaking any OSINT_LLM_* vars set in the dev's .env into
+# tests asserting "Grok defaults when no flag passed".
+#
+# Two-part isolation:
+#  1. Strip any OSINT_LLM_* vars already in the test process's environment.
+#  2. Stub `osint.cli.load_dotenv` so it's a no-op unless an explicit
+#     `dotenv_path=` was passed (i.e. via the --env-file flag). The two
+#     tests that exercise the .env-loading path do pass --env-file, so
+#     they still get real dotenv behavior; everyone else gets a clean env.
+@pytest.fixture(autouse=True)
+def _isolate_dotenv(monkeypatch):
+    for var in (
+        "OSINT_LLM_MODEL",
+        "OSINT_LLM_BASE_URL",
+        "OSINT_LLM_API_KEY_ENV",
+        "OSINT_LLM_INPUT_MTOK_USD",
+        "OSINT_LLM_OUTPUT_MTOK_USD",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    from dotenv import load_dotenv as _real_load_dotenv
+
+    def _gated_load_dotenv(*args, **kwargs):
+        # Only call through if --env-file was passed (sets dotenv_path).
+        if kwargs.get("dotenv_path") is not None or args:
+            return _real_load_dotenv(*args, **kwargs)
+        return False
+
+    monkeypatch.setattr("osint.cli.load_dotenv", _gated_load_dotenv)
+
+
 async def test_cli_passes_subject_to_scan(tmp_path: Path):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
