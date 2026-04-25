@@ -1,0 +1,314 @@
+"""Apify scraper tools — Instagram, LinkedIn, Twitter.
+
+Verified against installed `apify-client==2.5.0`. Findings (via inspect):
+
+- `ApifyClientAsync.actor(actor_id).call(run_input=..., ...)` is an async
+  coroutine. Signature confirmed via inspect.signature:
+    (*, run_input: Any = None, content_type: str | None = None,
+     build: str | None = None, max_items: int | None = None,
+     max_total_charge_usd: Decimal | None = None,
+     restart_on_error: bool | None = None,
+     memory_mbytes: int | None = None, timeout_secs: int | None = None,
+     webhooks: list[dict] | None = None,
+     force_permission_level: ActorPermissionLevel | None = None,
+     wait_secs: int | None = None,
+     logger: Logger | None | Literal['default'] = 'default') -> dict | None
+
+- The returned dict is the raw Apify REST API JSON for the run object.
+  `apify-client` does NOT convert keys to snake_case; the dataset id is keyed
+  `defaultDatasetId` (camelCase), matching the Apify API spec. Verified by
+  reading the source: `actor.call` ultimately returns the result of
+  `RunClient.wait_for_finish` whose body is the raw API JSON without any case
+  transformation.
+
+- `ApifyClientAsync.dataset(dataset_id).list_items(...)` is an async coroutine
+  returning a `ListPage` object (defined in apify_client/_types.py). The page
+  exposes `.items: list[T]`, `.count`, `.offset`, `.limit`, `.total`, `.desc`.
+  We use `.items`.
+
+Direct attribute access — fail loudly if apify-client bumps a major version
+and renames these methods. Per project policy: no defensive fallbacks.
+"""
+
+import json
+import os
+from typing import Any, Type
+
+from apify_client import ApifyClientAsync
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field, PrivateAttr
+
+from osint.errors import ScanConfigError
+
+
+DEFAULT_IG_ACTOR = "apify~instagram-scraper"
+DEFAULT_LI_ACTOR = "apify~linkedin-profile-scraper"
+DEFAULT_TW_ACTOR = "apidojo~twitter-scraper-lite"
+
+
+async def _run_actor(
+    client: ApifyClientAsync,
+    actor_id: str,
+    run_input: dict,
+) -> dict:
+    """Invoke an Apify actor and pull dataset items.
+
+    Returns a dict shaped {"items": [...], "raw": {"default_dataset_id": ...,
+    "items": [...]}} where the raw block is what we persist to the scan log.
+    """
+    run = await client.actor(actor_id).call(run_input=run_input)
+    if not run:
+        return {"items": [], "raw": {"default_dataset_id": None, "items": []}}
+    dataset_id = run["defaultDatasetId"]
+    page = await client.dataset(dataset_id).list_items()
+    items = page.items
+    return {
+        "items": items,
+        "raw": {"default_dataset_id": dataset_id, "items": items},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Instagram
+# ---------------------------------------------------------------------------
+
+
+class ApifyInstagramInput(BaseModel):
+    username: str = Field(description="Instagram username, without the @.")
+    results_limit: int = Field(default=20, ge=1, le=50)
+
+
+_IG_DESCRIPTION = (
+    "Fetch a public Instagram profile and the user's recent posts via Apify's "
+    "instagram-scraper actor. Use when you have a confirmed Instagram handle."
+    "\n\nReturns:\n"
+    "- Profile: username, full name, biography, follower/following counts, "
+    "verification status, business-account flag, external URL, profile "
+    "pictures (standard and HD), total post count, IGTV count.\n"
+    "- Per post: caption, hashtags, user mentions, like/comment/view counts, "
+    "timestamp, image dimensions, display/media URLs, post type "
+    "(Image / Video / Sidecar carousel), location data, sponsored flag.\n\n"
+    "Inputs: `username` (without @, required) and `results_limit` (1-50, "
+    "default 20) for the number of recent posts. The underlying actor also "
+    "supports hashtag search, place search, and post-URL fetch — those are "
+    "not exposed in v1; if you need them, prefer `tavily_search` for the URL "
+    "discovery and call this tool by handle."
+)
+
+
+class ApifyInstagramTool(BaseTool):
+    name: str = "apify_instagram"
+    description: str = _IG_DESCRIPTION
+    args_schema: Type[BaseModel] = ApifyInstagramInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_IG_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_IG_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        username: str,
+        results_limit: int = 20,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        run_input = {"usernames": [username], "resultsLimit": results_limit}
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        content = json.dumps({"username": username, "items": result["items"]}, default=str)
+        return content, result
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn
+# ---------------------------------------------------------------------------
+
+
+class ApifyLinkedInInput(BaseModel):
+    profile_url: str = Field(description="Full https://www.linkedin.com/in/<slug>/ URL.")
+
+
+_LI_DESCRIPTION = (
+    "Fetch a LinkedIn profile by its public URL via an Apify scraper actor "
+    "(no LinkedIn login required). Use when you have a confirmed LinkedIn "
+    "profile URL.\n\nReturns:\n"
+    "- Identity: full name, headline, summary/about, location, profile "
+    "pictures, public identifier, LinkedIn URN, connection count, follower "
+    "count.\n"
+    "- Work history: every position — title, company, description, "
+    "start/end dates, employment status, location.\n"
+    "- Companies referenced: name, industry, website, LinkedIn URL, size "
+    "range, founding year.\n"
+    "- Education: institutions, degrees, fields of study, dates.\n"
+    "- Skills (with endorsement counts), languages, certifications, "
+    "publications, patents, volunteer experience, recommendations.\n"
+    "- Some actors also attempt email-address discovery for the profile.\n\n"
+    "Input: `profile_url` — the full https://www.linkedin.com/in/<slug>/ URL. "
+    "The actor does NOT support free-text people search by name; discover "
+    "the URL first via `tavily_search` and then call this tool."
+)
+
+
+class ApifyLinkedInTool(BaseTool):
+    name: str = "apify_linkedin"
+    description: str = _LI_DESCRIPTION
+    args_schema: Type[BaseModel] = ApifyLinkedInInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_LI_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_LI_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        profile_url: str,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        run_input = {"profileUrls": [profile_url]}
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        content = json.dumps({"profile_url": profile_url, "items": result["items"]}, default=str)
+        return content, result
+
+
+# ---------------------------------------------------------------------------
+# Twitter / X
+# ---------------------------------------------------------------------------
+
+
+class ApifyTwitterInput(BaseModel):
+    handle: str | None = Field(default=None, description="X handle without @.")
+    search_query: str | None = Field(default=None, description="X search query.")
+    max_items: int = Field(default=20, ge=1, le=100)
+
+
+_TW_DESCRIPTION = (
+    "Fetch X (Twitter) content via an Apify scraper actor. Use this for ANY "
+    "X-native content — X's public surface is poorly indexed by general web "
+    "search.\n\nTwo input modes (mutually exclusive):\n"
+    "- `handle` (without @): fetches the user's profile and their recent "
+    "tweets. Pass this to map a known X account.\n"
+    "- `search_query`: searches tweets across all of X. Supports Twitter "
+    "advanced search syntax (e.g. `from:nasa mars`, `\"jane doe\" "
+    "since:2025-01-01`, `to:username`, hashtags). Pass this to find posts "
+    "mentioning the subject across X.\n\nReturns:\n"
+    "- Per tweet: tweet ID, URL, text, language, creation timestamp, "
+    "engagement counts (likes, retweets, replies, quotes, bookmarks), media "
+    "attachments, geolocation when present, conversation/thread context.\n"
+    "- Author per tweet: handle, display name, follower count, verification "
+    "status (standard and Blue), profile picture.\n"
+    "- For handle mode: profile metadata (handle, name, follower/following "
+    "counts, verification, profile pictures) alongside the recent-tweet "
+    "stream.\n\nOptional `max_items` (1-100, default 20) caps the result set "
+    "per call. The underlying actor also supports tweet-URL fetch and "
+    "conversation-ID fetch; those are not exposed in v1 — use the search "
+    "syntax (`conversation_id:...`, direct tweet URL search) if you need them."
+)
+
+
+class ApifyTwitterTool(BaseTool):
+    name: str = "apify_twitter"
+    description: str = _TW_DESCRIPTION
+    args_schema: Type[BaseModel] = ApifyTwitterInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_TW_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_TW_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        handle: str | None = None,
+        search_query: str | None = None,
+        max_items: int = 20,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        if bool(handle) == bool(search_query):
+            raise ValueError(
+                "ApifyTwitterTool requires exactly one of `handle` or "
+                "`search_query` (got both or neither)."
+            )
+
+        run_input: dict[str, Any] = {"maxItems": max_items}
+        if handle:
+            run_input["twitterHandles"] = [handle]
+        else:
+            run_input["searchTerms"] = [search_query]
+
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        content = json.dumps(
+            {
+                "handle": handle,
+                "search_query": search_query,
+                "items": result["items"],
+            },
+            default=str,
+        )
+        return content, result
+
+
+# ---------------------------------------------------------------------------
+# Lazy client construction
+# ---------------------------------------------------------------------------
+
+
+def _build_client() -> ApifyClientAsync:
+    token = os.getenv("APIFY_TOKEN")
+    if not token:
+        raise ScanConfigError(
+            "APIFY_TOKEN environment variable is not set; cannot build "
+            "ApifyClientAsync."
+        )
+    return ApifyClientAsync(token=token)
