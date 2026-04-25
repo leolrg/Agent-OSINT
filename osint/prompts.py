@@ -21,6 +21,22 @@ Steps:
 4. Stop calling tools when nothing new is likely to surface or when you
    believe you have enough evidence.
 
+Search-and-extract pattern (this is how you handle web search; do not skip
+the second step):
+  a. `tavily_search(query)` returns short snippets and URLs. The snippets
+     are usually too short and sometimes misleading — they are NOT
+     sufficient evidence on their own.
+  b. Look at each result's URL and title; identify which 1–3 are most
+     likely to actually contain information about the subject (a personal
+     site, a profile page, an article that names them — NOT a generic
+     listing/aggregator/SEO page).
+  c. Call `tavily_extract` on those URLs to get the real page content.
+     Then reason from that content, not from the search snippets.
+  d. Skip the extract step only when no result is even plausibly relevant.
+
+The same pattern applies to any "search" → "fetch" step: get URLs first,
+then read the relevant ones.
+
 Available tools: {tool_names}
 
 Routing guidance (use the right tool for the job, not whichever happens to
@@ -68,8 +84,8 @@ JSON block with the shape:
 
 # Per-tool one-line routing rules, only included for tools actually enabled.
 _ROUTING_RULES = {
-    "tavily_search": "tavily_search — general web (news, blogs, personal sites, public profiles outside of X). The default for any open-web question.",
-    "tavily_extract": "tavily_extract — read the full content of a specific URL you already have. Use after a search hit looks promising.",
+    "tavily_search": "tavily_search — general web (news, blogs, personal sites, public profiles outside of X). The default for any open-web question. Returns URLs + short snippets — the snippets are NOT sufficient evidence; always follow up with tavily_extract on the most-relevant URLs.",
+    "tavily_extract": "tavily_extract — read the full content of one or more URLs. Use this RIGHT AFTER every tavily_search that returns ≥1 plausibly-relevant result: identify the 1–3 URLs most likely to actually be about the subject (personal site, profile page, article that names them — NOT generic listings or aggregators) and call extract on them. Search snippets alone are short and often misleading; the page content is the real evidence. Only skip extract when zero results look even mildly relevant.",
     "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
     "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
     "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",

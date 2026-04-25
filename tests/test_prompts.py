@@ -32,6 +32,24 @@ def test_synthesis_prompt_mentions_stop_reason():
     assert "budget" in p.lower()
 
 
+def test_system_prompt_pushes_extract_after_search():
+    """Regression: the prompt must explicitly tell the agent to call
+    tavily_extract after tavily_search. Past behavior was for the LLM
+    to skip extract whenever it felt the snippets were good enough."""
+    p = build_system_prompt(
+        subject="Jane",
+        tool_names=["tavily_search", "tavily_extract"],
+    )
+    assert "tavily_extract" in p
+    # The Steps block should call out the search→extract pattern.
+    assert "Search-and-extract pattern" in p or "search-and-extract" in p.lower()
+    # And the routing rule should be assertive, not optional.
+    lower = p.lower()
+    assert "snippets are not sufficient" in lower or "snippets" in lower
+    # The phrase should appear that ties the two tools together.
+    assert "after every tavily_search" in lower or "right after every tavily_search" in lower
+
+
 def test_parse_report_from_fenced_json():
     text = 'stuff\n```json\n{"extracted_identifiers": {"emails": ["j@e"]}, "report": {"summary": "hi"}}\n```\nmore'
     r = parse_report(text)
