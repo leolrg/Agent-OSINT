@@ -3,7 +3,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from osint.scan import scan
+from osint.run import scan
 from osint.types import LLMConfig, LLMPricing, ScanConfig
 
 

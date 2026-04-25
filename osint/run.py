@@ -18,7 +18,7 @@
 #   `langgraph.prebuilt.create_react_agent` is deprecated in LangGraph V1.0
 #   in favour of `langchain.agents.create_agent` (with `system_prompt=`).
 #   We keep the import aliased as `create_react_agent` so that tests can
-#   monkeypatch `osint.scan.create_react_agent` without change.
+#   monkeypatch `osint.run.create_react_agent` without change.
 #   Migration to `create_agent` / `system_prompt=` is a one-line change
 #   when the old symbol is removed.
 

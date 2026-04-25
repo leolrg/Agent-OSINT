@@ -5,7 +5,7 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from osint.scan import scan
+from osint.run import scan
 from osint.types import ScanConfig
 
 
@@ -56,11 +56,8 @@ async def test_scan_happy_path_no_tool_calls(tmp_path):
 
 
 async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch):
-    import sys
-    import importlib
-    importlib.import_module("osint.scan")
-    scan_module = sys.modules["osint.scan"]
-    monkeypatch.setattr(scan_module, "create_react_agent",
+    import osint.run as run_module
+    monkeypatch.setattr(run_module, "create_react_agent",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):
         await scan(subject="Jane", config=ScanConfig(enabled_tools={"tavily_search"}),
@@ -73,10 +70,7 @@ async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch
 
 
 async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
-    import sys
-    import importlib
-    importlib.import_module("osint.scan")
-    scan_module = sys.modules["osint.scan"]
+    import osint.run as run_module
     from osint.errors import ScanStopped
 
     async def raise_stopped(*_a, **_k):
@@ -84,7 +78,7 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
     fake_agent = MagicMock()
     fake_agent.ainvoke = AsyncMock(side_effect=raise_stopped)
-    monkeypatch.setattr(scan_module, "create_react_agent", lambda *a, **k: fake_agent)
+    monkeypatch.setattr(run_module, "create_react_agent", lambda *a, **k: fake_agent)
 
     synth_llm = MagicMock()
     synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))
@@ -100,10 +94,7 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
 
 async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
-    import sys
-    import importlib
-    importlib.import_module("osint.scan")
-    scan_module = sys.modules["osint.scan"]
+    import osint.run as run_module
     import asyncio
 
     async def hang(*_a, **_k):
@@ -111,7 +102,7 @@ async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
 
     fake_agent = MagicMock()
     fake_agent.ainvoke = AsyncMock(side_effect=hang)
-    monkeypatch.setattr(scan_module, "create_react_agent", lambda *a, **k: fake_agent)
+    monkeypatch.setattr(run_module, "create_react_agent", lambda *a, **k: fake_agent)
 
     synth_llm = MagicMock()
     synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))

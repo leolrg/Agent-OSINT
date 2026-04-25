@@ -1,5 +1,5 @@
 from osint.errors import ScanConfigError, ScanStopped
-from osint.scan import scan
+from osint.run import scan
 from osint.types import LLMConfig, LLMPricing, ScanConfig, ScanResult, ToolCallRecord
 
 __all__ = [
