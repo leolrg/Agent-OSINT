@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -28,44 +29,101 @@ def _build_parser() -> argparse.ArgumentParser:
                         "shell environment variables are NOT overridden.")
     # LLM swap. Any OpenAI-compatible chat completions endpoint works.
     s.add_argument("--llm-model", default=None,
-                   help="LLM model name (default: grok-4.20).")
+                   help="LLM model name. Falls back to $OSINT_LLM_MODEL, then "
+                        "grok-4.20.")
     s.add_argument("--llm-base-url", default=None,
-                   help="OpenAI-compatible chat-completions base URL "
-                        "(default: https://api.x.ai/v1). Examples: "
-                        "https://api.openai.com/v1, https://api.deepseek.com/v1, "
-                        "http://localhost:11434/v1.")
+                   help="OpenAI-compatible chat-completions base URL. Falls "
+                        "back to $OSINT_LLM_BASE_URL, then https://api.x.ai/v1. "
+                        "Examples: https://api.openai.com/v1, "
+                        "https://api.deepseek.com/v1, http://localhost:11434/v1.")
     s.add_argument("--llm-api-key-env", default=None,
-                   help="Env var that holds the API key for the LLM "
-                        "(default: XAI_API_KEY).")
+                   help="Env var that holds the API key for the LLM. Falls "
+                        "back to $OSINT_LLM_API_KEY_ENV, then XAI_API_KEY.")
     s.add_argument("--llm-input-mtok-usd", type=float, default=None,
-                   help="Per-million-input-token cost in USD; defaults to grok-4.20 ($2.0).")
+                   help="Per-million-input-token cost in USD. Falls back to "
+                        "$OSINT_LLM_INPUT_MTOK_USD, then grok-4.20 ($2.0).")
     s.add_argument("--llm-output-mtok-usd", type=float, default=None,
-                   help="Per-million-output-token cost in USD; defaults to grok-4.20 ($6.0).")
+                   help="Per-million-output-token cost in USD. Falls back to "
+                        "$OSINT_LLM_OUTPUT_MTOK_USD, then grok-4.20 ($6.0).")
     return parser
 
 
-def _llm_config_from_args(args) -> LLMConfig | None:
-    """Build an LLMConfig only if the user passed at least one --llm-* flag.
+# Recognized env-var names for the LLM-config layer (loaded from .env or
+# exported in the shell). CLI flags override these; these override LLMConfig
+# defaults. See _resolve_llm_config.
+_ENV_LLM_MODEL = "OSINT_LLM_MODEL"
+_ENV_LLM_BASE_URL = "OSINT_LLM_BASE_URL"
+_ENV_LLM_API_KEY_ENV = "OSINT_LLM_API_KEY_ENV"
+_ENV_LLM_INPUT_MTOK_USD = "OSINT_LLM_INPUT_MTOK_USD"
+_ENV_LLM_OUTPUT_MTOK_USD = "OSINT_LLM_OUTPUT_MTOK_USD"
 
-    Otherwise return None and let ScanConfig's default kick in. Pricing
-    fields default to LLMPricing's defaults if either rate flag is omitted.
-    """
-    flags = [args.llm_model, args.llm_base_url, args.llm_api_key_env,
-             args.llm_input_mtok_usd, args.llm_output_mtok_usd]
-    if all(f is None for f in flags):
+
+def _env_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
         return None
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise SystemExit(f"error: {name}={raw!r} is not a valid number ({e})")
+
+
+def _resolve_llm_config(args) -> LLMConfig | None:
+    """Build the LLMConfig by merging three layers, in precedence order:
+
+      1. `--llm-*` CLI flags (highest)
+      2. `OSINT_LLM_*` environment variables (.env-friendly defaults)
+      3. `LLMConfig()` hardcoded defaults — Grok 4.20 (lowest)
+
+    Returns None when nothing was overridden, so `ScanConfig`'s default
+    `llm` field kicks in unchanged. Otherwise returns a fully-resolved
+    `LLMConfig`. Must be called AFTER `load_dotenv()` so the environment
+    layer is populated.
+    """
     base = LLMConfig()
-    pricing = LLMPricing(
-        input_per_mtok_usd=args.llm_input_mtok_usd if args.llm_input_mtok_usd is not None
-                           else base.pricing.input_per_mtok_usd,
-        output_per_mtok_usd=args.llm_output_mtok_usd if args.llm_output_mtok_usd is not None
-                            else base.pricing.output_per_mtok_usd,
+
+    env_model = os.environ.get(_ENV_LLM_MODEL) or None
+    env_base_url = os.environ.get(_ENV_LLM_BASE_URL) or None
+    env_api_key_env = os.environ.get(_ENV_LLM_API_KEY_ENV) or None
+    env_input_rate = _env_float(_ENV_LLM_INPUT_MTOK_USD)
+    env_output_rate = _env_float(_ENV_LLM_OUTPUT_MTOK_USD)
+
+    model = args.llm_model or env_model or base.model
+    base_url = args.llm_base_url or env_base_url or base.base_url
+    api_key_env_var = args.llm_api_key_env or env_api_key_env or base.api_key_env_var
+
+    input_rate = (
+        args.llm_input_mtok_usd
+        if args.llm_input_mtok_usd is not None
+        else env_input_rate
+        if env_input_rate is not None
+        else base.pricing.input_per_mtok_usd
     )
+    output_rate = (
+        args.llm_output_mtok_usd
+        if args.llm_output_mtok_usd is not None
+        else env_output_rate
+        if env_output_rate is not None
+        else base.pricing.output_per_mtok_usd
+    )
+
+    if (
+        model == base.model
+        and base_url == base.base_url
+        and api_key_env_var == base.api_key_env_var
+        and input_rate == base.pricing.input_per_mtok_usd
+        and output_rate == base.pricing.output_per_mtok_usd
+    ):
+        return None
+
     return LLMConfig(
-        model=args.llm_model or base.model,
-        base_url=args.llm_base_url or base.base_url,
-        api_key_env_var=args.llm_api_key_env or base.api_key_env_var,
-        pricing=pricing,
+        model=model,
+        base_url=base_url,
+        api_key_env_var=api_key_env_var,
+        pricing=LLMPricing(
+            input_per_mtok_usd=input_rate,
+            output_per_mtok_usd=output_rate,
+        ),
     )
 
 
@@ -95,7 +153,7 @@ async def main(argv: list[str] | None = None) -> int:
     }
     if args.enable:
         kwargs["enabled_tools"] = set(args.enable)
-    llm_cfg = _llm_config_from_args(args)
+    llm_cfg = _resolve_llm_config(args)
     if llm_cfg is not None:
         kwargs["llm"] = llm_cfg
 

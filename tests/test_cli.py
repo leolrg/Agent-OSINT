@@ -103,3 +103,75 @@ async def test_cli_env_file_does_not_override_shell_env(tmp_path: Path, monkeypa
         await main(["scan", "Jane", "--scans-dir", str(tmp_path),
                     "--env-file", str(env_file)])
     assert _os.environ.get("OSINT_TEST_KEY") == "from-shell"
+
+
+async def test_osint_llm_env_vars_set_default_llm(tmp_path: Path, monkeypatch):
+    """OSINT_LLM_* env vars resolve into the LLMConfig when no CLI flag is passed."""
+    monkeypatch.setenv("OSINT_LLM_MODEL", "deepseek-chat")
+    monkeypatch.setenv("OSINT_LLM_BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("OSINT_LLM_API_KEY_ENV", "DEEPSEEK_API_KEY")
+    monkeypatch.setenv("OSINT_LLM_INPUT_MTOK_USD", "0.27")
+    monkeypatch.setenv("OSINT_LLM_OUTPUT_MTOK_USD", "1.10")
+
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
+
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.llm.model == "deepseek-chat"
+    assert cfg.llm.base_url == "https://api.deepseek.com/v1"
+    assert cfg.llm.api_key_env_var == "DEEPSEEK_API_KEY"
+    assert cfg.llm.pricing.input_per_mtok_usd == 0.27
+    assert cfg.llm.pricing.output_per_mtok_usd == 1.10
+
+
+async def test_cli_flag_overrides_osint_llm_env(tmp_path: Path, monkeypatch):
+    """CLI --llm-* flags win over OSINT_LLM_* env vars."""
+    monkeypatch.setenv("OSINT_LLM_MODEL", "deepseek-chat")
+    monkeypatch.setenv("OSINT_LLM_API_KEY_ENV", "DEEPSEEK_API_KEY")
+
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main([
+            "scan", "Jane", "--scans-dir", str(tmp_path),
+            "--llm-model", "gpt-5",
+            "--llm-api-key-env", "OPENAI_API_KEY",
+        ])
+
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.llm.model == "gpt-5"               # CLI wins
+    assert cfg.llm.api_key_env_var == "OPENAI_API_KEY"  # CLI wins
+
+
+async def test_partial_osint_llm_env_keeps_other_defaults(tmp_path: Path, monkeypatch):
+    """Setting just one OSINT_LLM_* var leaves the others at LLMConfig defaults."""
+    monkeypatch.setenv("OSINT_LLM_MODEL", "grok-4.21")
+    # Don't touch base_url / api_key_env / pricing
+
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
+
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.llm.model == "grok-4.21"             # from env
+    assert cfg.llm.base_url == "https://api.x.ai/v1"   # default
+    assert cfg.llm.api_key_env_var == "XAI_API_KEY"    # default
+    assert cfg.llm.pricing.input_per_mtok_usd == 2.0   # default
+    assert cfg.llm.pricing.output_per_mtok_usd == 6.0  # default
+
+
+async def test_invalid_osint_llm_rate_env_var_errors_clearly(tmp_path: Path, monkeypatch):
+    """Bad numeric in OSINT_LLM_INPUT_MTOK_USD must fail with a clear error."""
+    monkeypatch.setenv("OSINT_LLM_INPUT_MTOK_USD", "not-a-number")
+    with pytest.raises(SystemExit) as exc:
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
+    assert "OSINT_LLM_INPUT_MTOK_USD" in str(exc.value)
