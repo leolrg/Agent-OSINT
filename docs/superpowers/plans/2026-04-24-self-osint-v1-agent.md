@@ -2265,10 +2265,13 @@ async def scan(
     try:
         tools = build_tools(config, state)
 
+        # Note: `prompt=` is the current arg name in langgraph >=0.2.60.
+        # Older releases accepted `state_modifier=` as a deprecated alias;
+        # newer releases removed it.
         agent = create_react_agent(
             llm,
             tools,
-            state_modifier=SystemMessage(
+            prompt=SystemMessage(
                 content=build_system_prompt(subject, sorted(config.enabled_tools))
             ),
         )
