@@ -3,6 +3,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from osint.run import scan
 from osint.types import LLMConfig, LLMPricing, ScanConfig
 
@@ -20,6 +22,10 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-seconds", type=int, default=600)
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
+    s.add_argument("--env-file", type=Path, default=None,
+                   help="Path to a .env file to load API keys from "
+                        "(default: walk up from cwd looking for .env). Existing "
+                        "shell environment variables are NOT overridden.")
     # LLM swap. Any OpenAI-compatible chat completions endpoint works.
     s.add_argument("--llm-model", default=None,
                    help="LLM model name (default: grok-4.20).")
@@ -66,6 +72,16 @@ def _llm_config_from_args(args) -> LLMConfig | None:
 async def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    # Load .env if present. CLI-only — the library (osint.scan) stays free of
+    # filesystem side effects on import. override=False so an exported shell
+    # env var still wins over the .env file (.env is a default, not an
+    # override). If --env-file was passed, point dotenv at it explicitly;
+    # otherwise it walks up from cwd looking for a .env.
+    if args.env_file is not None:
+        load_dotenv(dotenv_path=args.env_file, override=False)
+    else:
+        load_dotenv(override=False)
 
     subject = args.subject if args.subject is not None else sys.stdin.read()
     if not subject or not subject.strip():

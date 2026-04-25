@@ -69,3 +69,37 @@ async def test_cli_keeps_default_llm_when_no_flags(tmp_path: Path):
     cfg = m.call_args.kwargs["config"]
     assert cfg.llm.model == "grok-4.20"
     assert cfg.llm.api_key_env_var == "XAI_API_KEY"
+
+
+async def test_cli_loads_env_file_when_flag_passed(tmp_path: Path, monkeypatch):
+    """--env-file populates os.environ from a .env file before scan() runs."""
+    monkeypatch.delenv("OSINT_TEST_KEY", raising=False)
+    env_file = tmp_path / "myenv"
+    env_file.write_text("OSINT_TEST_KEY=loaded-from-dotenv\n")
+
+    import os as _os
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)):
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path),
+                    "--env-file", str(env_file)])
+    assert _os.environ.get("OSINT_TEST_KEY") == "loaded-from-dotenv"
+
+
+async def test_cli_env_file_does_not_override_shell_env(tmp_path: Path, monkeypatch):
+    """An exported shell var wins over the .env file (override=False)."""
+    monkeypatch.setenv("OSINT_TEST_KEY", "from-shell")
+    env_file = tmp_path / "myenv"
+    env_file.write_text("OSINT_TEST_KEY=from-dotenv\n")
+
+    import os as _os
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)):
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path),
+                    "--env-file", str(env_file)])
+    assert _os.environ.get("OSINT_TEST_KEY") == "from-shell"

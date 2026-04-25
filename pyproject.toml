@@ -12,6 +12,7 @@ dependencies = [
     "apify-client>=1.7",
     "maigret>=0.4.4",
     "structlog>=24.1",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
