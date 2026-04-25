@@ -965,17 +965,17 @@ import asyncio
 import json
 from typing import Any, Type
 
+import maigret as _maigret_pkg
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
-
-try:
-    import maigret as _maigret_pkg
-except ImportError:  # pragma: no cover
-    _maigret_pkg = None
 
 
 # Process-wide politeness cap. See spec §6.6.
 _MAIGRET_SEMAPHORE = asyncio.Semaphore(2)
+
+# Resolve the entrypoint at import time. If the maigret release on PyPI ever
+# moves it, the package must be pinned to a known-good version in pyproject.toml.
+_MAIGRET_SEARCH = getattr(_maigret_pkg, "search", None)
 
 
 class MaigretInput(BaseModel):
@@ -996,16 +996,8 @@ async def _search(
     proxy: str | None,
     site_list: list[str] | None,
 ) -> dict:
-    if _maigret_pkg is None:
-        raise RuntimeError("maigret is not installed")
-
     def _run() -> dict:
-        fn = getattr(_maigret_pkg, "search", None) or getattr(
-            _maigret_pkg.maigret, "search", None
-        )
-        if fn is None:
-            raise RuntimeError("maigret.search entrypoint not found")
-        return fn(
+        return _MAIGRET_SEARCH(
             username=username,
             max_connections=max_connections,
             timeout=timeout,
@@ -2236,10 +2228,18 @@ async def scan(
             path=path,
         )
     except Exception:
+        # Best-effort: persist whatever state we have so the failure is
+        # auditable. If THIS write also fails, log the secondary error and
+        # let the original exception propagate (do not mask it with the
+        # secondary one — the original is what the caller needs to see).
         try:
             await write_scan_json(scans_dir, state, status="failed")
-        except Exception:
-            pass
+        except Exception as secondary:
+            logger.error(
+                "scan.failed_write_failed",
+                scan_id=state.scan_id,
+                secondary_error=repr(secondary),
+            )
         raise
 ```
 
