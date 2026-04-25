@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from osint.run import scan
-from osint.types import LLMConfig, LLMPricing, ScanConfig, default_enabled_tools
+from osint.types import LLMConfig, LLMPricing, ScanConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -22,12 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-calls", type=int, default=30)
     s.add_argument("--max-seconds", type=int, default=600)
     s.add_argument("--enable", action="append", default=None,
-                   help="ADD a tool to the default free set ({tavily_search, "
-                        "tavily_extract, maigret}). Repeatable. To use a "
-                        "completely custom set instead, use --only.")
-    s.add_argument("--only", action="append", default=None,
-                   help="Use EXACTLY this set of tools (replaces the default). "
-                        "Repeatable. Mutually exclusive with --enable.")
+                   help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
     s.add_argument("--env-file", type=Path, default=None,
                    help="Path to a .env file to load API keys from "
                         "(default: walk up from cwd looking for .env). Existing "
@@ -156,14 +151,8 @@ async def main(argv: list[str] | None = None) -> int:
         "max_tool_calls": args.max_calls,
         "max_wall_clock_sec": args.max_seconds,
     }
-    if args.enable and args.only:
-        print("error: --enable and --only are mutually exclusive", file=sys.stderr)
-        sys.exit(2)
-    if args.only:
-        kwargs["enabled_tools"] = set(args.only)
-    elif args.enable:
-        # Additive: keep the default free-tier tools and add the requested ones.
-        kwargs["enabled_tools"] = default_enabled_tools() | set(args.enable)
+    if args.enable:
+        kwargs["enabled_tools"] = set(args.enable)
     llm_cfg = _resolve_llm_config(args)
     if llm_cfg is not None:
         kwargs["llm"] = llm_cfg
