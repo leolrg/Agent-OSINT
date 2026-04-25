@@ -24,7 +24,7 @@ class _Echo(BaseTool):
     def _run(self, q: str):
         raise NotImplementedError
 
-    async def _arun(self, q: str) -> tuple[str, dict]:
+    async def _arun(self, q: str, **kwargs) -> tuple[str, dict]:
         return f"echo:{q}", {"echoed": q, "raw": {"q": q}}
 
 
@@ -36,7 +36,7 @@ class _Plain(BaseTool):
     def _run(self, q: str):
         raise NotImplementedError
 
-    async def _arun(self, q: str) -> str:
+    async def _arun(self, q: str, **kwargs) -> str:
         return f"plain:{q}"
 
 
@@ -91,7 +91,7 @@ async def test_capped_tool_logs_inner_exception_and_reraises():
         def _run(self, q: str):
             raise NotImplementedError
 
-        async def _arun(self, q: str) -> str:
+        async def _arun(self, q: str, **kwargs) -> str:
             raise RuntimeError("nope")
 
     state = ScanState(scan_id="s", subject="S", config=ScanConfig())
@@ -101,3 +101,22 @@ async def test_capped_tool_logs_inner_exception_and_reraises():
     rec = state.tool_calls[0]
     assert "nope" in rec.error
     assert rec.output is None
+
+
+async def test_capped_tool_handles_parallel_invocations_independently():
+    """Two concurrent ainvoke() tasks on the same instance must not race on
+    tool_call_id (regression for the _pending_tool_call_id race that existed
+    when this was a per-instance PrivateAttr instead of a ContextVar)."""
+    import asyncio
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.0)
+    results = await asyncio.gather(
+        capped.ainvoke({"q": "a", "_tool_call_id": "id_A"}),
+        capped.ainvoke({"q": "b", "_tool_call_id": "id_B"}),
+    )
+    # Both calls succeeded
+    assert {results[0], results[1]} == {"echo:a", "echo:b"}
+    # Both ToolCallRecords were tagged with the correct, distinct ids.
+    ids = {tc.tool_call_id for tc in state.tool_calls}
+    assert ids == {"id_A", "id_B"}

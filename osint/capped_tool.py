@@ -1,4 +1,4 @@
-import inspect
+import contextvars
 from datetime import datetime, timezone
 from typing import Any, Type
 
@@ -10,6 +10,16 @@ from pydantic import BaseModel, PrivateAttr
 from osint.errors import ScanStopped
 from osint.state import ScanState
 from osint.types import ToolCallRecord
+
+
+# Per-asyncio-task storage for the tool_call_id pulled from `ainvoke`'s input.
+# Using a ContextVar (rather than an instance attribute) keeps concurrent
+# ainvoke() tasks on the same shared CappedTool instance isolated from each
+# other, which is the situation LangGraph's ToolNode produces when the agent
+# emits multiple tool_calls in one turn.
+_PENDING_TOOL_CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_pending_tool_call_id", default=None
+)
 
 
 class CappedTool(BaseTool):
@@ -26,7 +36,6 @@ class CappedTool(BaseTool):
     _wrapped: BaseTool = PrivateAttr()
     _state: ScanState = PrivateAttr()
     _est_cost_usd: float = PrivateAttr()
-    _pending_tool_call_id: str | None = PrivateAttr(default=None)
 
     def __init__(self, wrapped: BaseTool, state: ScanState, est_cost_usd: float):
         super().__init__(
@@ -48,14 +57,14 @@ class CappedTool(BaseTool):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Any:
-        # LangChain may receive `_tool_call_id` in the invocation dict when the
-        # caller passes it (e.g. tests). Pop it before LangChain validates the
-        # input against args_schema (which would otherwise drop it silently).
+        # Pull `_tool_call_id` out of the input dict before LangChain's
+        # args_schema parsing strips it as an unknown key. Stash on a
+        # per-task ContextVar so concurrent ainvoke() calls don't race.
         if isinstance(input, dict) and "_tool_call_id" in input:
             input = dict(input)
-            self._pending_tool_call_id = input.pop("_tool_call_id")
+            _PENDING_TOOL_CALL_ID.set(input.pop("_tool_call_id"))
         else:
-            self._pending_tool_call_id = None
+            _PENDING_TOOL_CALL_ID.set(None)
         return await super().ainvoke(input, config=config, **kwargs)
 
     async def _arun(
@@ -64,7 +73,7 @@ class CappedTool(BaseTool):
         run_manager: AsyncCallbackManagerForToolRun | None = None,
         **kwargs,
     ):
-        tool_call_id = getattr(self, "_pending_tool_call_id", None)
+        tool_call_id = _PENDING_TOOL_CALL_ID.get()
 
         stopped, reason = self._state.should_stop()
         if stopped:
@@ -76,13 +85,7 @@ class CappedTool(BaseTool):
         error: str | None = None
 
         try:
-            sig = inspect.signature(self._wrapped._arun)
-            call_kwargs = dict(kwargs)
-            if "run_manager" in sig.parameters or any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            ):
-                call_kwargs["run_manager"] = run_manager
-            result = await self._wrapped._arun(*args, **call_kwargs)
+            result = await self._wrapped._arun(*args, run_manager=run_manager, **kwargs)
             if self.response_format == "content_and_artifact" and isinstance(result, tuple):
                 content, artifact = result
             else:
