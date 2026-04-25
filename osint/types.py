@@ -9,10 +9,6 @@ def default_enabled_tools() -> set[str]:
     return {"tavily_search", "tavily_extract", "maigret"}
 
 
-def default_tool_concurrency() -> dict[str, int]:
-    return {"maigret": 2}
-
-
 class LLMPricing(BaseModel):
     """Per-million-token pricing used to convert usage_metadata into USD."""
     input_per_mtok_usd: NonNegativeFloat = 2.0   # grok-4.20 default, 2026-04 per xAI docs
@@ -37,7 +33,6 @@ class ScanConfig(BaseModel):
     budget_usd: PositiveFloat = 5.0
     max_tool_calls: PositiveInt = 30
     max_wall_clock_sec: PositiveInt = 600
-    tool_concurrency: dict[str, int] = Field(default_factory=default_tool_concurrency)
     tool_options: dict[str, dict] = Field(default_factory=dict)
     llm: LLMConfig = Field(default_factory=LLMConfig)
 

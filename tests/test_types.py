@@ -7,7 +7,6 @@ def test_scanconfig_defaults():
     assert c.budget_usd == 5.0
     assert c.max_tool_calls == 30
     assert c.max_wall_clock_sec == 600
-    assert c.tool_concurrency == {"maigret": 2}
     assert c.tool_options == {}
     # grok-4.20 default pointing at xAI's OpenAI-compatible endpoint.
     assert c.llm.model == "grok-4.20"
