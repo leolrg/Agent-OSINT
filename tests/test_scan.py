@@ -56,7 +56,10 @@ async def test_scan_happy_path_no_tool_calls(tmp_path):
 
 
 async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch):
-    from osint import scan as scan_module
+    import sys
+    import importlib
+    importlib.import_module("osint.scan")
+    scan_module = sys.modules["osint.scan"]
     monkeypatch.setattr(scan_module, "create_react_agent",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):
@@ -70,7 +73,10 @@ async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch
 
 
 async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
-    from osint import scan as scan_module
+    import sys
+    import importlib
+    importlib.import_module("osint.scan")
+    scan_module = sys.modules["osint.scan"]
     from osint.errors import ScanStopped
 
     async def raise_stopped(*_a, **_k):
@@ -94,7 +100,10 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
 
 async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
-    from osint import scan as scan_module
+    import sys
+    import importlib
+    importlib.import_module("osint.scan")
+    scan_module = sys.modules["osint.scan"]
     import asyncio
 
     async def hang(*_a, **_k):
