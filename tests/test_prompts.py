@@ -33,21 +33,46 @@ def test_synthesis_prompt_mentions_stop_reason():
 
 
 def test_system_prompt_pushes_extract_after_search():
-    """Regression: the prompt must explicitly tell the agent to call
-    tavily_extract after tavily_search. Past behavior was for the LLM
-    to skip extract whenever it felt the snippets were good enough."""
+    """Regression: the prompt must reference both tools and the search→extract
+    workflow. Wording is owned by the user; just assert structure."""
     p = build_system_prompt(
         subject="Jane",
         tool_names=["tavily_search", "tavily_extract"],
     )
     assert "tavily_extract" in p
-    # The Steps block should call out the search→extract pattern.
-    assert "Search-and-extract pattern" in p or "search-and-extract" in p.lower()
-    # And the routing rule should be assertive, not optional.
+    assert "tavily_search" in p
+    # The search-and-extract pattern block must exist (in some form).
     lower = p.lower()
-    assert "snippets are not sufficient" in lower or "snippets" in lower
-    # The phrase should appear that ties the two tools together.
-    assert "after every tavily_search" in lower or "right after every tavily_search" in lower
+    assert "search-and-extract" in lower or "search and extract" in lower
+    # The prompt must mention that snippets aren't enough on their own.
+    assert "snippet" in lower
+
+
+def test_system_prompt_uses_prose_plus_tail_json_format():
+    """Path 2 contract: agent emits prose, then a fenced JSON tail with
+    ONLY extracted_identifiers. The prompt must NOT instruct the agent
+    to wrap the report itself in JSON (the old envelope contract)."""
+    p = build_system_prompt(
+        subject="Jane",
+        tool_names=["tavily_search"],
+    )
+    lower = p.lower()
+    # Prose is the report.
+    assert "prose is the report" in lower or "prose report" in lower
+    # And the JSON tail carries identifiers only.
+    assert "extracted_identifiers" in p
+    # The old "report" key in the envelope should NOT be advertised as the
+    # agent's output schema (we removed it).
+    assert '"report":' not in p
+
+
+def test_system_prompt_requires_source_citations():
+    """Reports must cite the tool call that produced each major claim,
+    so a reader can audit which evidence supports which finding."""
+    p = build_system_prompt(subject="Jane", tool_names=["tavily_search"])
+    lower = p.lower()
+    assert "cite" in lower
+    assert "tool call" in lower or "tool_call" in lower
 
 
 def test_parse_report_from_fenced_json():
@@ -66,6 +91,40 @@ def test_parse_report_falls_back_on_invalid_json():
 def test_parse_report_handles_bare_json():
     r = parse_report('{"extracted_identifiers": {}, "report": {"x": 1}}')
     assert r["report"] == {"x": 1}
+
+
+def test_parse_report_prose_plus_tail_identifiers_json():
+    """Path 2: the new contract — prose body, fenced JSON tail with only
+    extracted_identifiers. Identifiers come from the JSON; the prose
+    (with the JSON block stripped) becomes report['text']."""
+    text = (
+        "**Executive Summary**\n\n"
+        "Jane Doe is a software engineer based in NYC...\n\n"
+        "**Sources**\n- tavily_extract of https://example.com/jane\n\n"
+        "```json\n"
+        '{"extracted_identifiers": {"emails": ["jane@example.com"], "urls": ["https://example.com/jane"]}}\n'
+        "```\n"
+    )
+    r = parse_report(text)
+    assert r["extracted_identifiers"] == {
+        "emails": ["jane@example.com"],
+        "urls": ["https://example.com/jane"],
+    }
+    # Prose is preserved (with JSON block removed) under report['text'].
+    assert "Executive Summary" in r["report"]["text"]
+    assert "Sources" in r["report"]["text"]
+    # The JSON block itself was stripped.
+    assert "```json" not in r["report"]["text"]
+    assert "extracted_identifiers" not in r["report"]["text"]
+
+
+def test_parse_report_pure_prose_no_json():
+    """No fenced JSON anywhere → the whole text becomes report['text'],
+    identifiers stay empty."""
+    text = "**Executive Summary**\n\nNot much was found about this subject."
+    r = parse_report(text)
+    assert r["extracted_identifiers"] == {}
+    assert r["report"] == {"text": text}
 
 
 def test_synthesis_prompt_with_tool_calls_summary():
