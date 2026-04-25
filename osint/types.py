@@ -1,3 +1,7 @@
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 from pydantic import BaseModel, Field, NonNegativeFloat, PositiveFloat, PositiveInt
 
 
@@ -36,3 +40,27 @@ class ScanConfig(BaseModel):
     tool_concurrency: dict[str, int] = Field(default_factory=default_tool_concurrency)
     tool_options: dict[str, dict] = Field(default_factory=dict)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+
+
+class ToolCallRecord(BaseModel):
+    turn: int
+    tool: str
+    tool_call_id: str | None = None    # matches LangGraph's tool_calls[].id
+    input: dict[str, Any]
+    output: dict[str, Any] | None
+    raw: Any
+    started_at: datetime
+    completed_at: datetime
+    cost_usd: float
+    error: str | None = None
+
+
+class ScanResult(BaseModel):
+    scan_id: str
+    subject: str
+    extracted_identifiers: dict[str, Any] = Field(default_factory=dict)
+    report: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    total_cost_usd: float = 0.0
+    duration_sec: float = 0.0
+    path: Path

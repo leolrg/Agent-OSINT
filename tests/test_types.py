@@ -51,3 +51,30 @@ def test_scanconfig_overrides_other_fields():
     )
     assert c.enabled_tools == {"tavily_search"}
     assert c.tool_options["maigret"]["proxy_url"] == "http://p:8080"
+
+
+from datetime import datetime
+from pathlib import Path
+from osint.types import ToolCallRecord, ScanResult
+
+
+def test_toolcallrecord_defaults():
+    now = datetime(2026, 4, 24)
+    tc = ToolCallRecord(
+        turn=1, tool="tavily_search", tool_call_id="call_a",
+        input={"query": "x"}, output={"results": []}, raw={"results": []},
+        started_at=now, completed_at=now, cost_usd=0.004,
+    )
+    assert tc.error is None
+
+
+def test_scanresult_fields():
+    s = ScanResult(
+        scan_id="s1", subject="Jane Doe",
+        extracted_identifiers={"emails": ["j@e"]},
+        report={"summary": "..."},
+        tool_calls=[], total_cost_usd=0.0, duration_sec=1.0,
+        path=Path("/tmp/s1.json"),
+    )
+    assert s.subject == "Jane Doe"
+    assert s.path.name == "s1.json"
