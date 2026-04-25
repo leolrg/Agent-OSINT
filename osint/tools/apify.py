@@ -41,8 +41,12 @@ from pydantic import BaseModel, Field, PrivateAttr
 from osint.errors import ScanConfigError
 
 
+# All three slugs verified live against api.apify.com/v2/acts/<slug> (2026-04).
+# Apify (the company) does NOT publish a LinkedIn profile scraper — that's
+# why we point at the dev_fusion community actor, which is the most-active
+# maintained one ($10 / 1k profiles).
 DEFAULT_IG_ACTOR = "apify~instagram-scraper"
-DEFAULT_LI_ACTOR = "apify~linkedin-profile-scraper"
+DEFAULT_LI_ACTOR = "dev_fusion~linkedin-profile-scraper"
 DEFAULT_TW_ACTOR = "apidojo~twitter-scraper-lite"
 
 
@@ -55,8 +59,23 @@ async def _run_actor(
 
     Returns a dict shaped {"items": [...], "raw": {"default_dataset_id": ...,
     "items": [...]}} where the raw block is what we persist to the scan log.
+
+    Wraps the actor.call() in a thin try/except that re-raises with the
+    actor_id embedded in the message, since apify-client's default error
+    ("Actor with this name was not found") doesn't say which slug failed —
+    making it impossible to diagnose without a stack trace inspection.
     """
-    run = await client.actor(actor_id).call(run_input=run_input)
+    try:
+        run = await client.actor(actor_id).call(run_input=run_input)
+    except Exception as e:
+        # Re-raise with the actor_id in the message but preserve the original
+        # exception via __cause__ for the LangChain tool-error handler.
+        # Avoid type(e)(...) — ApifyApiError has a multi-arg __init__ that
+        # rejects a single-string call.
+        raise RuntimeError(
+            f"Apify actor call failed for actor_id={actor_id!r}: "
+            f"{type(e).__name__}: {e}"
+        ) from e
     if not run:
         return {"items": [], "raw": {"default_dataset_id": None, "items": []}}
     dataset_id = run["defaultDatasetId"]
