@@ -1,4 +1,4 @@
-from osint.prompts import build_system_prompt, build_synthesis_prompt, parse_report
+from osint.prompts import build_system_prompt, build_synthesis_prompt, format_tool_calls_for_synthesis, parse_report
 
 
 def test_system_prompt_contains_subject_and_tools():
@@ -48,3 +48,34 @@ def test_parse_report_falls_back_on_invalid_json():
 def test_parse_report_handles_bare_json():
     r = parse_report('{"extracted_identifiers": {}, "report": {"x": 1}}')
     assert r["report"] == {"x": 1}
+
+
+def test_synthesis_prompt_with_tool_calls_summary():
+    p = build_synthesis_prompt("budget", '1. tavily_search({"q":"x"}) → {"r":1}')
+    assert "1. tavily_search" in p
+    assert "budget" in p
+
+
+def test_synthesis_prompt_default_summary_when_no_tool_calls():
+    p = build_synthesis_prompt("max_calls")
+    assert "no tool calls" in p
+    assert "max_calls" in p
+
+
+def test_format_tool_calls_for_synthesis():
+    from datetime import datetime, timezone
+    from osint.types import ToolCallRecord
+    now = datetime.now(timezone.utc)
+    calls = [
+        ToolCallRecord(turn=1, tool="tavily_search", tool_call_id=None,
+                       input={"query": "x"}, output={"results": [1, 2, 3]},
+                       raw=None, started_at=now, completed_at=now, cost_usd=0.008),
+        ToolCallRecord(turn=2, tool="maigret", tool_call_id=None,
+                       input={"username": "jdoe"}, output=None, raw=None,
+                       started_at=now, completed_at=now, cost_usd=0.0,
+                       error="RuntimeError: boom"),
+    ]
+    out = format_tool_calls_for_synthesis(calls)
+    assert "1. tavily_search" in out
+    assert "2. maigret" in out
+    assert "ERROR: RuntimeError: boom" in out

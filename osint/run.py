@@ -36,7 +36,12 @@ from langgraph.prebuilt import create_react_agent
 from osint.errors import ScanConfigError, ScanStopped
 from osint.llm_cost import LLMCostCallback
 from osint.log import configure_logging, logger
-from osint.prompts import build_synthesis_prompt, build_system_prompt, parse_report
+from osint.prompts import (
+    build_synthesis_prompt,
+    build_system_prompt,
+    format_tool_calls_for_synthesis,
+    parse_report,
+)
 from osint.state import ScanState, StopReason
 from osint.storage import new_scan_id, write_scan_json
 from osint.tools import build_tools
@@ -71,9 +76,10 @@ async def _synthesize(
     stop_reason: str,
     cost_cb: LLMCostCallback,
 ) -> str:
+    summary = format_tool_calls_for_synthesis(state.tool_calls)
     msgs = [
         SystemMessage(content=build_system_prompt(subject, sorted(state.config.enabled_tools))),
-        HumanMessage(content=build_synthesis_prompt(stop_reason)),
+        HumanMessage(content=build_synthesis_prompt(stop_reason, summary)),
     ]
     result = await llm.ainvoke(msgs, config={"callbacks": [cost_cb]})
     return result.content or ""

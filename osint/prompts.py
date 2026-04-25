@@ -51,9 +51,11 @@ what the user will read, so populate it fully.
 SYNTHESIS_TEMPLATE = """\
 The scan was cut short. Reason: {stop_reason}.
 
-Based on the tool calls already made and their results in the conversation so
-far, produce the final report now. Return ONLY a fenced JSON block with the
-shape:
+Tool calls already made during this scan:
+{tool_calls_summary}
+
+Based on these results, produce the final report now. Return ONLY a fenced
+JSON block with the shape:
 
 ```json
 {{
@@ -85,8 +87,31 @@ def build_system_prompt(subject: str, tool_names: list[str]) -> str:
     )
 
 
-def build_synthesis_prompt(stop_reason: str) -> str:
-    return SYNTHESIS_TEMPLATE.format(stop_reason=stop_reason)
+def build_synthesis_prompt(stop_reason: str, tool_calls_summary: str = "(no tool calls were made)") -> str:
+    return SYNTHESIS_TEMPLATE.format(
+        stop_reason=stop_reason,
+        tool_calls_summary=tool_calls_summary,
+    )
+
+
+def format_tool_calls_for_synthesis(tool_calls: list, max_output_chars: int = 500) -> str:
+    """One-line-per-call summary for the synthesis prompt.
+    Format: `N. tool_name(input_dict) -> output_or_error[:max_chars]`
+    Each output is JSON-serialized then truncated so a long-running scan's
+    prompt stays bounded."""
+    import json as _json
+    if not tool_calls:
+        return "(no tool calls were made)"
+    lines = []
+    for tc in tool_calls:
+        inp = _json.dumps(tc.input, default=str, separators=(",", ":"))
+        if tc.error:
+            result = f"ERROR: {tc.error}"
+        else:
+            raw = _json.dumps(tc.output, default=str, separators=(",", ":")) if tc.output else "{}"
+            result = raw[:max_output_chars] + ("…(truncated)" if len(raw) > max_output_chars else "")
+        lines.append(f"{tc.turn}. {tc.tool}({inp}) → {result}")
+    return "\n".join(lines)
 
 
 _FENCED_JSON = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
