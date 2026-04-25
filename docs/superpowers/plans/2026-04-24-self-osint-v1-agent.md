@@ -1761,13 +1761,26 @@ from osint.tools.tavily import make_tavily_extract, make_tavily_search
 from osint.types import ScanConfig
 
 
+# Per-call cost estimates (USD). Sourced from each vendor's published
+# pricing as of 2026-04. These feed scan budget enforcement; if you switch
+# Apify actors or move Tavily plans, update them here.
 _COSTS = {
-    "tavily_search": 0.004,
-    "tavily_extract": 0.001,
+    # Tavily basic search = 1 credit; PAYG = $0.008/credit.
+    "tavily_search": 0.008,
+    # Tavily extract = 1 credit per 5 URLs (basic). One call typically
+    # extracts 1-5 URLs; budget the worst-case-cheap-tier at 1 credit.
+    "tavily_extract": 0.008,
+    # Local library; no vendor cost.
     "maigret": 0.0,
-    "apify_instagram": 0.15,
-    "apify_linkedin": 0.05,
-    "apify_twitter": 0.05,
+    # apify/instagram-scraper: $1.50 per 1,000 results. One call returns
+    # 1 profile + N posts (default 20) = ~21 items × $0.0015 = ~$0.03.
+    "apify_instagram": 0.03,
+    # apify/linkedin-profile-scraper (dev_fusion): $10.00 per 1,000 profiles.
+    # One call = 1 profile = $0.01.
+    "apify_linkedin": 0.01,
+    # apidojo/twitter-scraper-lite: ~$0.016 per standard query (covers up
+    # to ~40 tweets in one call). Round up for safety.
+    "apify_twitter": 0.02,
 }
 
 

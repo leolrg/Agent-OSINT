@@ -303,12 +303,12 @@ Structured logs via `structlog` to stderr. One log line per: scan start, scan st
 
 | Tool | Vendor | Tier | Est cost/call | Notes |
 |---|---|---|---|---|
-| `tavily_search` | tavily | free-tier | ~$0.004 | Web search, returns URLs + snippets |
-| `tavily_extract` | tavily | free-tier | ~$0.001/URL | Read URLs, return cleaned markdown |
+| `tavily_search` | tavily | free-tier | ~$0.008/call | Basic search = 1 credit @ $0.008/credit (PAYG). |
+| `tavily_extract` | tavily | free-tier | ~$0.008/call | 1 credit per 5 URLs (basic depth). |
 | `maigret` | maigret | free | $0 | Local lib; username → accounts across ~3000 sites |
-| `apify_instagram` | apify | paid | ~$0.02–0.20 | Apify IG profile/posts actor |
-| `apify_linkedin` | apify | paid | ~$0.02–0.10 | Apify LinkedIn profile actor |
-| `apify_twitter` | apify | paid | ~$0.02–0.10 | Apify X/Twitter scraper actor. Two modes via input: `handle` (profile + recent tweets) or `search_query` (search across X). |
+| `apify_instagram` | apify | paid | ~$0.03/call | `apify/instagram-scraper` @ $1.50 / 1k results; default 1 profile + 20 posts. |
+| `apify_linkedin` | apify | paid | ~$0.01/profile | `dev_fusion/linkedin-profile-scraper` @ $10 / 1k profiles. |
+| `apify_twitter` | apify | paid | ~$0.02/call | `apidojo/twitter-scraper-lite` ≈ $0.016 per standard query (covers ~40 tweets). Two input modes: `handle` (profile + recent tweets) or `search_query` (search across X). |
 
 Paid tools default to *disabled* in `ScanConfig` unless the caller explicitly enables them (and the corresponding API key is set in env).
 
