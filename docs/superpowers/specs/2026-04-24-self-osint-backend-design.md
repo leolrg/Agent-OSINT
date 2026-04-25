@@ -70,7 +70,7 @@ The product category is **self-OSINT**: the caller is the subject. Access gating
 │   maigret              (free, local library)                  │
 │   apify_instagram      (paid, Apify actor)                    │
 │   apify_linkedin       (paid, Apify actor)                    │
-│   grok_x_search        (paid, Grok Live Search scoped to X)   │
+│   apify_twitter        (paid, Apify X/Twitter scraper actor)  │
 │                                                               │
 │   Each: async run(args) → dict. Registered, schema-described, │
 │   cost-estimated, guarded by per-vendor semaphore.            │
@@ -174,44 +174,36 @@ class GrokLLM:
 
 Implementation uses the `openai` async client pointed at xAI's endpoint (xAI's API is OpenAI-compatible for chat completions + tool use).
 
-### 6.5 `grok_x_search` tool — X-content retrieval via xAI's Responses API
+### 6.5 `apify_twitter` tool — X-content retrieval via Apify
 
-Main agent Grok calls are pure tool-use over Chat Completions (no implicit search — we want deterministic, auditable tool dispatch from the agent). X-content retrieval happens through a *dedicated* tool that uses xAI's **Responses API** with the server-side `x_search` tool.
+X-content retrieval happens through a dedicated Apify scraper actor. The actor is invoked by `ApifyTwitterTool`, a LangChain `BaseTool` that takes either a `handle` (fetch one user's profile + recent tweets) or a `search_query` (search tweets across X), runs the actor synchronously, and returns the dataset items as `(content, artifact)`.
 
-> Historical note: an earlier draft of this section used the `extra_body.search_parameters` form on Chat Completions. xAI deprecated that path on 2025-12-15 and replaced it with the Responses API + `x_search` server-side tool. We use the new path.
+> Historical note: earlier drafts used Grok's Live Search via Chat Completions (deprecated 2025-12-15) and then xAI's Responses API + `x_search` server-side tool. Both paths required a Grok-side LLM call and special token-accounting plumbing. We now route X scraping through Apify like the other social-platform tools, which gives us uniform vendor handling, no special LLM-bypass case, and an actor we can swap independently of any xAI API change.
 
 ```python
-class GrokXSearchTool(BaseTool):
-    name = "grok_x_search"
-    description = "Search X for content relevant to the query..."
-    args_schema = _GrokXInput   # {"query": str}
+class ApifyTwitterTool(BaseTool):
+    name = "apify_twitter"
+    args_schema = _TwitterInput   # {handle?, search_query?, max_items}
     response_format = "content_and_artifact"
 
-    async def _arun(self, query: str) -> tuple[str, dict]:
-        # Bare openai.AsyncOpenAI — Responses API isn't reachable through
-        # langchain-openai's ChatOpenAI in v1.
-        resp = await self.client.responses.create(
-            model="grok-4.20-reasoning",
-            input=[{"role": "user", "content": query}],
-            tools=[{"type": "x_search"}],
-        )
-        answer = resp.output_text or ""
-        artifact = {
-            "answer": answer,
-            "raw": resp.model_dump(),
-            "_llm_usage": {                                # see §6.8.1
-                "input_tokens":  int(resp.usage.input_tokens or 0),
-                "output_tokens": int(resp.usage.output_tokens or 0),
-            },
-        }
-        return answer, artifact
+    async def _arun(self, handle=None, search_query=None, max_items=20):
+        if not handle and not search_query:
+            raise ValueError("apify_twitter requires either handle or search_query")
+        run_input = {"maxItems": max_items}
+        if handle:
+            run_input["twitterHandles"] = [handle]
+        else:
+            run_input["searchTerms"] = [search_query]
+        artifact = await _run_actor(self.client, self._actor_id, run_input)
+        content = json.dumps({"items": artifact["items"]}, default=str)[:4000]
+        return content, artifact
 ```
 
-**Why a separate tool rather than enabling search on the main loop?** The main agent's job is to decide *what* to look for and route to the right tool. Enabling implicit search on the main loop would give the agent an opaque capability whose source URLs and citations we couldn't as cleanly log against the entity graph. A dedicated tool keeps X-content retrieval a deliberate, auditable action and lets us toggle it independently per scan.
+**Why Apify rather than Grok's `x_search`?** `x_search` returns a *model-synthesized answer* over content xAI's tool decided to fetch — opaque, non-deterministic per call, and we don't directly get the underlying tweets as structured records. Apify's scraper returns the actual tweet objects (author, text, timestamps, engagement counts), which is what the entity graph and final report need. Apify also lets us swap the actor for a different one without changing the rest of the pipeline.
 
-**LLM accounting bypass.** Because this tool calls xAI directly via the OpenAI SDK and not through LangChain, our `LLMCostCallback` (§6.8.1) won't fire for it. The tool advertises its token usage in `artifact["_llm_usage"]`; `CappedTool` reads that key and feeds the counts into `ScanState` so the scan budget covers the tool's internal LLM call.
+**Routing.** The main agent's system prompt (built in `prompts.py`) emits explicit rules per enabled tool, including: *"For ANY X (Twitter) content, use `apify_twitter` — pass `handle` for a profile fetch or `search_query` for a tweet search. Don't use `tavily_search` for X content; X's public surface is poorly indexed by general web search."*
 
-**Routing.** The main agent's system prompt (§6.6 *no — we keep prompts in a dedicated module, not the spec; routing rules live there*) explicitly tells the LLM to use `grok_x_search` for X-native content rather than `tavily_search`, since X's public surface is poorly indexed by general web search.
+**Default actor.** `apidojo/twitter-scraper-lite` is a popular maintained Apify actor; `actor_id` is configurable. If a different actor is preferred, the input schema may need adjustment in the tool's `_arun`.
 
 ### 6.6 Rate limiting
 
@@ -289,7 +281,7 @@ When any cap is hit mid-scan, the loop stops dispatching new tools, calls the LL
 
 Total scan cost has two sources and both must count against `budget_usd`, otherwise the budget silently under-bounds spend in a ReAct loop that calls the LLM on every turn.
 
-**Tool cost.** Each tool declares an `est_cost_usd_per_call`. The scan's running tool cost is the sum across all dispatched calls (including failed ones — the vendor still charged). For `grok_x_search` this estimate covers the xAI Live Search per-invocation fee only; the underlying LLM tokens are captured by the LLM accounting below.
+**Tool cost.** Each tool declares an `est_cost_usd_per_call`. The scan's running tool cost is the sum across all dispatched calls (including failed ones — the vendor still charged). All v1 tools route through vendor APIs that don't share token usage with the main agent's LLM, so there is no double-counting between tool cost and LLM cost.
 
 **LLM cost.** Every ReAct turn makes an LLM call. A LangChain callback captures `input_tokens` and `output_tokens` from each response's `usage_metadata` / `token_usage` block and accumulates them on `ScanState`. The cost is computed from a pricing table on `ScanConfig`:
 
@@ -316,7 +308,7 @@ Structured logs via `structlog` to stderr. One log line per: scan start, scan st
 | `maigret` | maigret | free | $0 | Local lib; username → accounts across ~3000 sites |
 | `apify_instagram` | apify | paid | ~$0.02–0.20 | Apify IG profile/posts actor |
 | `apify_linkedin` | apify | paid | ~$0.02–0.10 | Apify LinkedIn profile actor |
-| `grok_x_search` | xai | paid | ~$0.02/call | Covers ~3–5 Live Search sub-calls @ $2.50–$5.00 per 1k. LLM tokens billed separately (tracked by callback). |
+| `apify_twitter` | apify | paid | ~$0.02–0.10 | Apify X/Twitter scraper actor. Two modes via input: `handle` (profile + recent tweets) or `search_query` (search across X). |
 
 Paid tools default to *disabled* in `ScanConfig` unless the caller explicitly enables them (and the corresponding API key is set in env).
 

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Python library exposing `async def scan(subject: str, config) -> ScanResult` that drives a Grok-4.20 ReAct agent (LangGraph's `create_react_agent`) over six OSINT tools (`tavily_search`, `tavily_extract`, `maigret`, `apify_instagram`, `apify_linkedin`, `grok_x_search`) and writes a JSON-per-scan record with verbatim tool output.
+**Goal:** Build a Python library exposing `async def scan(subject: str, config) -> ScanResult` that drives a Grok-4.20 ReAct agent (LangGraph's `create_react_agent`) over six OSINT tools (`tavily_search`, `tavily_extract`, `maigret`, `apify_instagram`, `apify_linkedin`, `apify_twitter`) and writes a JSON-per-scan record with verbatim tool output.
 
-**Architecture:** One Python package (`osint/`). The agent loop is LangGraph's prebuilt ReAct agent; we wire Grok in as a `ChatOpenAI` pointed at xAI's OpenAI-compatible endpoint. Tavily tools are imported from `langchain-tavily` unchanged. Custom tools (Maigret, Apify IG/LinkedIn, Grok X search) are `langchain_core.tools.BaseTool` subclasses. Every tool is wrapped in a `CappedTool` that enforces per-scan budget/call/time caps and records each invocation (with the raw vendor response) to `ScanState`. After the agent loop terminates (normal, cap hit, or recursion limit), the final LLM message is parsed into a structured report and written as a single JSON file.
+**Architecture:** One Python package (`osint/`). The agent loop is LangGraph's prebuilt ReAct agent; we wire Grok in as a `ChatOpenAI` pointed at xAI's OpenAI-compatible endpoint. Tavily tools are imported from `langchain-tavily` unchanged. Custom tools (Maigret, Apify IG/LinkedIn/Twitter) are `langchain_core.tools.BaseTool` subclasses. Every tool is wrapped in a `CappedTool` that enforces per-scan budget/call/time caps and records each invocation (with the raw vendor response) to `ScanState`. After the agent loop terminates (normal, cap hit, or recursion limit), the final LLM message is parsed into a structured report and written as a single JSON file.
 
-**Tech Stack:** Python 3.11+, Pydantic v2, `langgraph`, `langchain-core`, `langchain-openai` (for the ChatOpenAI→xAI wiring on the main agent), `openai>=1.66` (for the Responses API used by `grok_x_search`), `langchain-tavily` (built-in Tavily tools), `apify-client`, `maigret` (library), `structlog`. Tests use `pytest`, `pytest-asyncio`, `pytest-mock`, and `langchain_core.language_models.fake_chat_models.FakeMessagesListChatModel` for scripted LLM responses.
+**Tech Stack:** Python 3.11+, Pydantic v2, `langgraph`, `langchain-core`, `langchain-openai` (ChatOpenAI→xAI Chat Completions for the main agent), `langchain-tavily`, `apify-client`, `maigret` (library), `structlog`. Tests use `pytest`, `pytest-asyncio`, `pytest-mock`, and `langchain_core.language_models.fake_chat_models.FakeMessagesListChatModel` for scripted LLM responses.
 
 **Spec reference:** `docs/superpowers/specs/2026-04-24-self-osint-backend-design.md`
 
@@ -31,8 +31,7 @@ osint/
     ├── __init__.py      # build_tools(config, state) factory
     ├── tavily.py        # thin wrappers around langchain-tavily
     ├── maigret.py       # BaseTool subclass, direct-scraping
-    ├── apify.py         # BaseTool subclasses for IG + LinkedIn
-    └── grok_x.py        # BaseTool subclass using a dedicated ChatOpenAI
+    └── apify.py         # BaseTool subclasses for IG + LinkedIn + Twitter
 
 tests/
 ├── __init__.py
@@ -45,7 +44,6 @@ tests/
 ├── test_tools_tavily.py
 ├── test_tools_maigret.py
 ├── test_tools_apify.py
-├── test_tools_grok_x.py
 ├── test_prompts.py
 ├── test_scan.py
 └── test_cli.py
@@ -78,7 +76,6 @@ dependencies = [
     "langgraph>=0.2.60",
     "langchain-core>=0.3.20",
     "langchain-openai>=0.2.10",
-    "openai>=1.66",                 # for Responses API used by grok_x_search
     "langchain-tavily>=0.1.0",
     "apify-client>=1.7",
     "maigret>=0.4.4",
@@ -751,27 +748,6 @@ async def test_capped_tool_raises_when_stopped():
     assert exc.value.reason == "budget"
 
 
-async def test_capped_tool_records_inner_llm_usage_from_artifact():
-    """A tool that does its own LLM call (e.g. grok_x_search via Responses API)
-    advertises token usage in artifact['_llm_usage']; CappedTool feeds it into
-    ScanState so the scan budget covers those tokens too."""
-
-    class _InnerLLMCaller(BaseTool):
-        name: str = "inner"
-        description: str = "calls an LLM internally"
-        args_schema: type = _EchoInput
-        response_format: str = "content_and_artifact"
-
-        async def _arun(self, q: str) -> tuple[str, dict]:
-            return "answer", {"answer": "answer", "_llm_usage": {"input_tokens": 1234, "output_tokens": 56}}
-
-    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
-    capped = CappedTool(wrapped=_InnerLLMCaller(), state=state, est_cost_usd=0.02)
-    await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
-    assert state.llm_input_tokens == 1234
-    assert state.llm_output_tokens == 56
-
-
 async def test_capped_tool_logs_inner_exception_and_reraises():
     class _Boom(BaseTool):
         name: str = "boom"
@@ -873,19 +849,6 @@ class CappedTool(BaseTool):
 
         completed = datetime.now(timezone.utc)
         output_dict = artifact if isinstance(artifact, dict) else {"text": str(content)}
-
-        # If the inner tool made its own LLM call (e.g. grok_x_search bypasses
-        # LangChain to hit xAI's Responses API), it advertises the token usage
-        # under the artifact's reserved "_llm_usage" key so we still count
-        # those tokens against the scan budget.
-        if isinstance(artifact, dict):
-            usage = artifact.get("_llm_usage")
-            if isinstance(usage, dict):
-                self._state.record_llm_usage(
-                    input_tokens=usage.get("input_tokens", 0) or 0,
-                    output_tokens=usage.get("output_tokens", 0) or 0,
-                )
-
         self._record(started, completed, tool_call_id, kwargs, output_dict, artifact, None)
 
         if self.response_format == "content_and_artifact":
@@ -1099,7 +1062,7 @@ git commit -m "feat(tools): add Maigret as LangChain BaseTool with process-wide 
 
 ---
 
-## Task 8: Apify tools (Instagram + LinkedIn BaseTools)
+## Task 8: Apify tools (Instagram + LinkedIn + Twitter BaseTools)
 
 **Files:**
 - Create: `osint/tools/apify.py`
@@ -1110,9 +1073,14 @@ git commit -m "feat(tools): add Maigret as LangChain BaseTool with process-wide 
 Create `tests/test_tools_apify.py`:
 
 ```python
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from osint.tools.apify import ApifyInstagramTool, ApifyLinkedInTool
+from osint.tools.apify import (
+    ApifyInstagramTool,
+    ApifyLinkedInTool,
+    ApifyTwitterTool,
+)
 
 
 def _fake_client(items):
@@ -1144,13 +1112,43 @@ async def test_apify_linkedin_runs_actor():
     assert artifact["items"][0]["fullName"] == "Jane"
 
 
+async def test_apify_twitter_handle_mode_runs_actor():
+    client, actor, dataset = _fake_client([{"author": {"userName": "jdoe"}, "text": "hi"}])
+    tool = ApifyTwitterTool(client=client, actor_id="apidojo~twitter-scraper-lite")
+    content, artifact = await tool._arun(handle="jdoe", max_items=25)
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert run_input["twitterHandles"] == ["jdoe"]
+    assert run_input["maxItems"] == 25
+    assert "searchTerms" not in run_input    # only one input mode populated
+    assert artifact["items"][0]["text"] == "hi"
+
+
+async def test_apify_twitter_search_mode_runs_actor():
+    client, actor, dataset = _fake_client([{"text": "hello"}])
+    tool = ApifyTwitterTool(client=client, actor_id="apidojo~twitter-scraper-lite")
+    await tool._arun(search_query="jane doe", max_items=10)
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert run_input["searchTerms"] == ["jane doe"]
+    assert run_input["maxItems"] == 10
+    assert "twitterHandles" not in run_input
+
+
+async def test_apify_twitter_requires_handle_or_query():
+    tool = ApifyTwitterTool(client=MagicMock(), actor_id="x")
+    with pytest.raises(ValueError):
+        await tool._arun()
+
+
 async def test_apify_metadata():
     ig = ApifyInstagramTool(client=MagicMock(), actor_id="x")
     li = ApifyLinkedInTool(client=MagicMock(), actor_id="x")
+    tw = ApifyTwitterTool(client=MagicMock(), actor_id="x")
     assert ig.name == "apify_instagram"
     assert li.name == "apify_linkedin"
+    assert tw.name == "apify_twitter"
     assert ig.response_format == "content_and_artifact"
     assert li.response_format == "content_and_artifact"
+    assert tw.response_format == "content_and_artifact"
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -1174,6 +1172,7 @@ from osint.errors import ScanConfigError
 
 DEFAULT_IG_ACTOR = "apify~instagram-scraper"
 DEFAULT_LI_ACTOR = "apify~linkedin-profile-scraper"
+DEFAULT_TW_ACTOR = "apidojo~twitter-scraper-lite"   # popular maintained X/Twitter scraper
 
 
 def _get_client() -> ApifyClientAsync:
@@ -1265,181 +1264,80 @@ class ApifyLinkedInTool(BaseTool):
         artifact = await _run_actor(self.client, self._actor_id, {"profileUrls": [profile_url]})
         content = json.dumps({"items": artifact["items"]}, default=str)[:4000]
         return content, artifact
-```
-
-- [ ] **Step 4: Run tests — expect pass**
-
-Run: `pytest tests/test_tools_apify.py -v`
-Expected: 3 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add osint/tools/apify.py tests/test_tools_apify.py
-git commit -m "feat(tools): add Apify Instagram + LinkedIn as LangChain BaseTools"
-```
-
----
-
-## Task 9: `grok_x_search` tool — xAI Responses API + `x_search` server-side tool
-
-**Files:**
-- Create: `osint/tools/grok_x.py`
-- Create: `tests/test_tools_grok_x.py`
-
-xAI's Live Search on Chat Completions is deprecated as of Dec 2025 (xAI release notes). The current path for X-content retrieval is the **Responses API** with `x_search` registered as a server-side tool the model auto-invokes during reasoning. Practical implications:
-
-- Endpoint: `client.responses.create(...)` — *not* `chat.completions.create(...)`.
-- Tool spec: `tools=[{"type": "x_search"}]` — *not* `extra_body.search_parameters`.
-- Model: `grok-4.20-reasoning` (the reasoning variant supports server-side search tools).
-- Client: the **raw `openai.AsyncOpenAI` SDK ≥1.66** (which exposes `.responses`). LangChain's `ChatOpenAI` wraps Chat Completions and can't reach the Responses API, so this one tool drops down to the bare SDK.
-- Token accounting: because we're *not* going through LangChain, our `LLMCostCallback` won't fire. The tool reads `response.usage` from the Responses API result and tucks it into the artifact under `_llm_usage`; `CappedTool` (Task 6) sees that key and records the tokens into `ScanState`.
-
-The main agent loop (Task 14) is unaffected — it keeps using `ChatOpenAI` against Chat Completions for plain tool-use, which is *not* deprecated.
-
-- [ ] **Step 1: Write failing tests**
-
-Create `tests/test_tools_grok_x.py`:
-
-```python
-from unittest.mock import AsyncMock, MagicMock
-
-from osint.tools.grok_x import GrokXSearchTool
 
 
-def _fake_responses_result(text: str, input_tokens: int, output_tokens: int) -> MagicMock:
-    """Mimic openai SDK's Responses API response shape."""
-    r = MagicMock()
-    r.output_text = text
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
-    r.usage = usage
-    r.model_dump.return_value = {"output_text": text, "id": "r1"}
-    return r
-
-
-async def test_grok_x_calls_responses_api_with_x_search_tool():
-    client = MagicMock()
-    client.responses.create = AsyncMock(
-        return_value=_fake_responses_result("@jane posted about X last week", 1500, 300)
+class _TwitterInput(BaseModel):
+    handle: str | None = Field(
+        default=None,
+        description="X handle to fetch profile + recent tweets for. Without @. "
+                    "Mutually exclusive with `search_query`.",
     )
-
-    tool = GrokXSearchTool(client=client, model="grok-4.20-reasoning")
-    content, artifact = await tool._arun(query="jane doe on X")
-
-    client.responses.create.assert_awaited_once()
-    kwargs = client.responses.create.call_args.kwargs
-    assert kwargs["model"] == "grok-4.20-reasoning"
-    assert kwargs["input"] == [{"role": "user", "content": "jane doe on X"}]
-    assert kwargs["tools"] == [{"type": "x_search"}]
-
-    assert content == "@jane posted about X last week"
-    assert artifact["answer"] == "@jane posted about X last week"
-    # CappedTool relies on this exact artifact key shape.
-    assert artifact["_llm_usage"] == {"input_tokens": 1500, "output_tokens": 300}
+    search_query: str | None = Field(
+        default=None,
+        description="Search X for tweets matching this query (e.g. a person's "
+                    "full name in quotes). Mutually exclusive with `handle`.",
+    )
+    max_items: int = Field(default=20, ge=1, le=100)
 
 
-async def test_grok_x_metadata():
-    tool = GrokXSearchTool(client=MagicMock())
-    assert tool.name == "grok_x_search"
-    assert tool.response_format == "content_and_artifact"
-```
-
-- [ ] **Step 2: Run — expect failure**
-
-Run: `pytest tests/test_tools_grok_x.py -v`
-Expected: `ImportError`.
-
-- [ ] **Step 3: Implement `osint/tools/grok_x.py`**
-
-```python
-import os
-from typing import Any, Type
-
-from langchain_core.tools import BaseTool
-from openai import AsyncOpenAI
-from pydantic import BaseModel, Field, PrivateAttr
-
-from osint.errors import ScanConfigError
-
-
-class _GrokXInput(BaseModel):
-    query: str = Field(description="What to search X for.")
-
-
-def _default_client() -> AsyncOpenAI:
-    api_key = os.environ.get("XAI_API_KEY")
-    if not api_key:
-        raise ScanConfigError("XAI_API_KEY is not set")
-    return AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-
-
-class GrokXSearchTool(BaseTool):
-    name: str = "grok_x_search"
+class ApifyTwitterTool(BaseTool):
+    name: str = "apify_twitter"
     description: str = (
-        "Search X (formerly Twitter) for content relevant to a query. Grok's "
-        "x_search server-side tool decides what to fetch from X — posts, "
-        "profiles, threads — and returns a synthesized answer plus citations. "
-        "Use this tool whenever the subject's X-native presence is in scope "
-        "(an X handle, an account on X, X posts about the subject). Other "
-        "platforms or general web content go through tavily_search instead."
+        "Fetch X (Twitter) content via an Apify scraper. Two modes: pass a "
+        "`handle` to fetch a specific user's profile + recent tweets, OR pass "
+        "a `search_query` to search tweets across all of X. Use this for ANY "
+        "X-native content; X's public surface is poorly indexed by general "
+        "web search."
     )
-    args_schema: Type[BaseModel] = _GrokXInput
+    args_schema: Type[BaseModel] = _TwitterInput
     response_format: str = "content_and_artifact"
 
-    _client: AsyncOpenAI | None = PrivateAttr(default=None)
-    _model: str = PrivateAttr(default="grok-4.20-reasoning")
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+    _actor_id: str = PrivateAttr()
 
-    def __init__(self, client: AsyncOpenAI | None = None, model: str = "grok-4.20-reasoning"):
+    def __init__(self, client: ApifyClientAsync | None = None, actor_id: str = DEFAULT_TW_ACTOR):
         super().__init__()
         self._client = client
-        self._model = model
+        self._actor_id = actor_id
 
     @property
-    def client(self) -> AsyncOpenAI:
+    def client(self) -> ApifyClientAsync:
         if self._client is None:
-            self._client = _default_client()
+            self._client = _get_client()
         return self._client
 
     def _run(self, *args, **kwargs):
         raise NotImplementedError("Use async invocation.")
 
-    async def _arun(self, query: str, **_: Any) -> tuple[str, dict]:
-        # Responses API call. xAI's `x_search` is a server-side tool that the
-        # model invokes during reasoning; we don't have to drive it ourselves.
-        resp = await self.client.responses.create(
-            model=self._model,
-            input=[{"role": "user", "content": query}],
-            tools=[{"type": "x_search"}],
-        )
-        answer = getattr(resp, "output_text", None) or ""
-
-        # Capture token usage so CappedTool can fold it into the scan budget.
-        usage = getattr(resp, "usage", None)
-        llm_usage = {
-            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        } if usage is not None else {"input_tokens": 0, "output_tokens": 0}
-
-        artifact = {
-            "answer": answer,
-            "raw": resp.model_dump() if hasattr(resp, "model_dump") else None,
-            "_llm_usage": llm_usage,
-        }
-        return answer, artifact
+    async def _arun(
+        self,
+        handle: str | None = None,
+        search_query: str | None = None,
+        max_items: int = 20,
+        **_: Any,
+    ) -> tuple[str, dict]:
+        if not handle and not search_query:
+            raise ValueError("apify_twitter requires either `handle` or `search_query`.")
+        run_input: dict[str, Any] = {"maxItems": max_items}
+        if handle:
+            run_input["twitterHandles"] = [handle]
+        else:
+            run_input["searchTerms"] = [search_query]
+        artifact = await _run_actor(self.client, self._actor_id, run_input)
+        content = json.dumps({"items": artifact["items"]}, default=str)[:4000]
+        return content, artifact
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
 
-Run: `pytest tests/test_tools_grok_x.py -v`
-Expected: 2 passed.
+Run: `pytest tests/test_tools_apify.py -v`
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add osint/tools/grok_x.py tests/test_tools_grok_x.py
-git commit -m "feat(tools): add grok_x_search using ChatOpenAI with Live Search extra_body"
+git add osint/tools/apify.py tests/test_tools_apify.py
+git commit -m "feat(tools): add Apify Instagram, LinkedIn, and Twitter as BaseTools"
 ```
 
 ---
@@ -1501,7 +1399,7 @@ def _require_key() -> str:
     return key
 
 
-def make_tavily_search(max_results: int = 10) -> TavilySearch:
+def make_tavily_search(max_results: int = 20) -> TavilySearch:
     """Return langchain-tavily's TavilySearch tool, named `tavily_search`.
 
     `langchain-tavily` already names this tool `tavily_search`, so no rename.
@@ -1557,21 +1455,21 @@ def test_system_prompt_contains_subject_and_tools():
     assert "```json" in p
 
 
-def test_system_prompt_routes_x_content_to_grok_x_when_enabled():
+def test_system_prompt_routes_x_content_to_apify_twitter_when_enabled():
     p = build_system_prompt(
         subject="Jane",
-        tool_names=["tavily_search", "grok_x_search"],
+        tool_names=["tavily_search", "apify_twitter"],
     )
-    # The prompt must explicitly tell the agent to use grok_x_search for X
+    # The prompt must explicitly tell the agent to use apify_twitter for X
     # content rather than relying on tool-description inference.
-    assert "grok_x_search" in p
+    assert "apify_twitter" in p
     assert "X (Twitter)" in p or "X content" in p or "X-native" in p
 
 
-def test_system_prompt_omits_x_routing_when_grok_x_disabled():
+def test_system_prompt_omits_x_routing_when_apify_twitter_disabled():
     p = build_system_prompt(subject="Jane", tool_names=["tavily_search", "maigret"])
-    # When grok_x_search isn't enabled, don't tell the LLM to use it.
-    assert "grok_x_search" not in p
+    # When apify_twitter isn't enabled, don't tell the LLM to use it.
+    assert "apify_twitter" not in p
 
 
 def test_synthesis_prompt_mentions_stop_reason():
@@ -1662,7 +1560,7 @@ _ROUTING_RULES = {
     "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
     "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
     "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",
-    "grok_x_search": "grok_x_search — for ANY X (Twitter) content: posts about the subject, the subject's X profile, X threads. Don't use tavily_search for X content; X's public surface is poorly indexed by general web search and grok_x_search has direct access via xAI's x_search tool.",
+    "apify_twitter": "apify_twitter — for ANY X (Twitter) content: pass `handle` to fetch a specific user's profile + recent tweets, or pass `search_query` to search tweets across X (e.g. for posts about the subject). Don't use tavily_search for X content; X's public surface is poorly indexed by general web search.",
 }
 
 
@@ -1804,8 +1702,11 @@ from langchain_core.tools import BaseTool
 from osint.capped_tool import CappedTool
 from osint.errors import ScanConfigError
 from osint.state import ScanState
-from osint.tools.apify import ApifyInstagramTool, ApifyLinkedInTool
-from osint.tools.grok_x import GrokXSearchTool
+from osint.tools.apify import (
+    ApifyInstagramTool,
+    ApifyLinkedInTool,
+    ApifyTwitterTool,
+)
 from osint.tools.maigret import MaigretTool
 from osint.tools.tavily import make_tavily_extract, make_tavily_search
 from osint.types import ScanConfig
@@ -1817,12 +1718,7 @@ _COSTS = {
     "maigret": 0.0,
     "apify_instagram": 0.15,
     "apify_linkedin": 0.05,
-    # grok_x_search est covers the xAI Live Search per-invocation fee only
-    # (~$2.50–$5.00 per 1k calls × ~3–5 search sub-calls per tool invocation).
-    # The LLM token cost of the sub-call is captured separately by
-    # LLMCostCallback when the tool's inner ChatOpenAI runs with that callback
-    # registered.
-    "grok_x_search": 0.02,
+    "apify_twitter": 0.05,
 }
 
 
@@ -1847,9 +1743,9 @@ def _make_raw_tool(name: str, config: ScanConfig) -> BaseTool:
     if name == "apify_linkedin":
         _require_env("APIFY_TOKEN", name)
         return ApifyLinkedInTool()
-    if name == "grok_x_search":
-        _require_env("XAI_API_KEY", name)
-        return GrokXSearchTool()
+    if name == "apify_twitter":
+        _require_env("APIFY_TOKEN", name)
+        return ApifyTwitterTool()
     raise ScanConfigError(f"unknown tool: {name}")
 
 
@@ -1927,7 +1823,7 @@ git commit -m "chore(log): add structlog setup"
 - Create: `osint/llm_cost.py`
 - Create: `tests/test_llm_cost.py`
 
-LangChain callbacks fire on every LLM call (inside the ReAct agent *and* inside our synthesis call *and* inside `GrokXSearchTool`'s inner call if we pass the callback into it). The callback parses the response's usage metadata — available at `LLMResult.llm_output["token_usage"]` (OpenAI-style) and/or on `AIMessage.usage_metadata` (LangChain-standardized) — and accumulates counts on `ScanState`.
+LangChain callbacks fire on every LLM call (inside the ReAct agent *and* inside our synthesis call). The callback parses the response's usage metadata — available at `LLMResult.llm_output["token_usage"]` (OpenAI-style) and/or on `AIMessage.usage_metadata` (LangChain-standardized) — and accumulates counts on `ScanState`. No v1 tool makes its own LLM call, so the callback covers all token spend.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2522,10 +2418,10 @@ git commit -m "feat(cli): add argparse CLI and finalize public exports"
 - §6.2 agent loop + parallel dispatch + stop conditions: ✓ Task 14 (LangGraph handles parallel dispatch natively; caps enforced via `CappedTool` raising `ScanStopped` + `asyncio.wait_for` + `recursion_limit`).
 - §6.3 tool contract: ✓ we replaced the custom `Tool` Protocol with LangChain's `BaseTool`; the contract is equivalent (name, description, input schema, async run).
 - §6.4 LLM abstraction: ✓ accepts any `BaseChatModel`; default is `ChatOpenAI` pointed at xAI.
-- §6.5 `grok_x_search` separate tool with X-scoped Live Search: ✓ Task 9.
+- §6.5 X-content tool: ✓ replaced grok_x_search with `apify_twitter` (Task 8). Apify-based scraper handles both per-handle profile fetches and X-wide search queries; no Responses API special case, no `_llm_usage` plumbing in CappedTool.
 - §6.6 Maigret mitigations (internal max_connections=15, process semaphore, proxy_url, sites_filter): ✓ Task 7.
 - §6.7 JSON output shape with `extracted_identifiers` and raw tool calls: ✓ Tasks 5, 14.
-- §6.8 cap enforcement + final synthesis + LLM-plus-tool cost accounting (§6.8.1): ✓ Tasks 2 (LLMPricing), 4 (combined `total_cost_usd`), 5 (JSON cost breakdown), 13.5 (`LLMCostCallback`), 14 (callback wired into both agent invocation and synthesis call). The `grok_x_search` entry in `_COSTS` is explicitly scoped to the Live Search fee only so token cost is not double-counted.
+- §6.8 cap enforcement + final synthesis + LLM-plus-tool cost accounting (§6.8.1): ✓ Tasks 2 (LLMPricing), 4 (combined `total_cost_usd`), 5 (JSON cost breakdown), 13.5 (`LLMCostCallback`), 14 (callback wired into both agent invocation and synthesis call). All tools route through vendor APIs that the main agent's LangChain-instrumented LLM doesn't touch, so vendor-tool token usage is not double-counted.
 - §6.9 structlog logging with scan_id, no subject PII: ✓ Task 13 + Task 14 (explicit fields on every log call are scan_id/duration/cost/call count).
 - §7 v1 tool list: ✓ all six.
 - §8 public API including `python -m osint.cli`: ✓ Task 15.
