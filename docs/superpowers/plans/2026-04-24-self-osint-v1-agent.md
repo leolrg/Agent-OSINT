@@ -6,7 +6,7 @@
 
 **Architecture:** One Python package (`osint/`). The agent loop is LangGraph's prebuilt ReAct agent; we wire Grok in as a `ChatOpenAI` pointed at xAI's OpenAI-compatible endpoint. Tavily tools are imported from `langchain-tavily` unchanged. Custom tools (Maigret, Apify IG/LinkedIn, Grok X search) are `langchain_core.tools.BaseTool` subclasses. Every tool is wrapped in a `CappedTool` that enforces per-scan budget/call/time caps and records each invocation (with the raw vendor response) to `ScanState`. After the agent loop terminates (normal, cap hit, or recursion limit), the final LLM message is parsed into a structured report and written as a single JSON file.
 
-**Tech Stack:** Python 3.11+, Pydantic v2, `langgraph`, `langchain-core`, `langchain-openai` (for the ChatOpenAI→xAI wiring), `langchain-tavily` (built-in Tavily tools), `apify-client`, `maigret` (library), `structlog`. Tests use `pytest`, `pytest-asyncio`, `pytest-mock`, and `langchain_core.language_models.fake_chat_models.FakeMessagesListChatModel` for scripted LLM responses.
+**Tech Stack:** Python 3.11+, Pydantic v2, `langgraph`, `langchain-core`, `langchain-openai` (for the ChatOpenAI→xAI wiring on the main agent), `openai>=1.66` (for the Responses API used by `grok_x_search`), `langchain-tavily` (built-in Tavily tools), `apify-client`, `maigret` (library), `structlog`. Tests use `pytest`, `pytest-asyncio`, `pytest-mock`, and `langchain_core.language_models.fake_chat_models.FakeMessagesListChatModel` for scripted LLM responses.
 
 **Spec reference:** `docs/superpowers/specs/2026-04-24-self-osint-backend-design.md`
 
@@ -78,6 +78,7 @@ dependencies = [
     "langgraph>=0.2.60",
     "langchain-core>=0.3.20",
     "langchain-openai>=0.2.10",
+    "openai>=1.66",                 # for Responses API used by grok_x_search
     "langchain-tavily>=0.1.0",
     "apify-client>=1.7",
     "maigret>=0.4.4",
@@ -750,6 +751,27 @@ async def test_capped_tool_raises_when_stopped():
     assert exc.value.reason == "budget"
 
 
+async def test_capped_tool_records_inner_llm_usage_from_artifact():
+    """A tool that does its own LLM call (e.g. grok_x_search via Responses API)
+    advertises token usage in artifact['_llm_usage']; CappedTool feeds it into
+    ScanState so the scan budget covers those tokens too."""
+
+    class _InnerLLMCaller(BaseTool):
+        name: str = "inner"
+        description: str = "calls an LLM internally"
+        args_schema: type = _EchoInput
+        response_format: str = "content_and_artifact"
+
+        async def _arun(self, q: str) -> tuple[str, dict]:
+            return "answer", {"answer": "answer", "_llm_usage": {"input_tokens": 1234, "output_tokens": 56}}
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_InnerLLMCaller(), state=state, est_cost_usd=0.02)
+    await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    assert state.llm_input_tokens == 1234
+    assert state.llm_output_tokens == 56
+
+
 async def test_capped_tool_logs_inner_exception_and_reraises():
     class _Boom(BaseTool):
         name: str = "boom"
@@ -851,6 +873,19 @@ class CappedTool(BaseTool):
 
         completed = datetime.now(timezone.utc)
         output_dict = artifact if isinstance(artifact, dict) else {"text": str(content)}
+
+        # If the inner tool made its own LLM call (e.g. grok_x_search bypasses
+        # LangChain to hit xAI's Responses API), it advertises the token usage
+        # under the artifact's reserved "_llm_usage" key so we still count
+        # those tokens against the scan budget.
+        if isinstance(artifact, dict):
+            usage = artifact.get("_llm_usage")
+            if isinstance(usage, dict):
+                self._state.record_llm_usage(
+                    input_tokens=usage.get("input_tokens", 0) or 0,
+                    output_tokens=usage.get("output_tokens", 0) or 0,
+                )
+
         self._record(started, completed, tool_call_id, kwargs, output_dict, artifact, None)
 
         if self.response_format == "content_and_artifact":
@@ -1246,13 +1281,21 @@ git commit -m "feat(tools): add Apify Instagram + LinkedIn as LangChain BaseTool
 
 ---
 
-## Task 9: `grok_x_search` tool
+## Task 9: `grok_x_search` tool — xAI Responses API + `x_search` server-side tool
 
 **Files:**
 - Create: `osint/tools/grok_x.py`
 - Create: `tests/test_tools_grok_x.py`
 
-This tool makes a *separate* Grok call from the main agent loop, with Live Search enabled and `sources=[{"type":"x"}]`. We use `langchain-openai`'s `ChatOpenAI` with `model_kwargs={"extra_body": ...}` to pass through the xAI-specific search_parameters.
+xAI's Live Search on Chat Completions is deprecated as of Dec 2025 (xAI release notes). The current path for X-content retrieval is the **Responses API** with `x_search` registered as a server-side tool the model auto-invokes during reasoning. Practical implications:
+
+- Endpoint: `client.responses.create(...)` — *not* `chat.completions.create(...)`.
+- Tool spec: `tools=[{"type": "x_search"}]` — *not* `extra_body.search_parameters`.
+- Model: `grok-4.20-reasoning` (the reasoning variant supports server-side search tools).
+- Client: the **raw `openai.AsyncOpenAI` SDK ≥1.66** (which exposes `.responses`). LangChain's `ChatOpenAI` wraps Chat Completions and can't reach the Responses API, so this one tool drops down to the bare SDK.
+- Token accounting: because we're *not* going through LangChain, our `LLMCostCallback` won't fire. The tool reads `response.usage` from the Responses API result and tucks it into the artifact under `_llm_usage`; `CappedTool` (Task 6) sees that key and records the tokens into `ScanState`.
+
+The main agent loop (Task 14) is unaffected — it keeps using `ChatOpenAI` against Chat Completions for plain tool-use, which is *not* deprecated.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1264,27 +1307,41 @@ from unittest.mock import AsyncMock, MagicMock
 from osint.tools.grok_x import GrokXSearchTool
 
 
-async def test_grok_x_calls_live_search():
-    fake_result = MagicMock()
-    fake_result.content = "@jane posted about X last week"
-    fake_result.response_metadata = {"id": "r1"}
-    fake_result.model_dump.return_value = {"id": "r1", "content": fake_result.content}
+def _fake_responses_result(text: str, input_tokens: int, output_tokens: int) -> MagicMock:
+    """Mimic openai SDK's Responses API response shape."""
+    r = MagicMock()
+    r.output_text = text
+    usage = MagicMock()
+    usage.input_tokens = input_tokens
+    usage.output_tokens = output_tokens
+    r.usage = usage
+    r.model_dump.return_value = {"output_text": text, "id": "r1"}
+    return r
 
-    fake_llm = MagicMock()
-    fake_llm.ainvoke = AsyncMock(return_value=fake_result)
 
-    tool = GrokXSearchTool(llm=fake_llm)
-    content, artifact = await tool._arun(query="jane doe", max_results=10)
+async def test_grok_x_calls_responses_api_with_x_search_tool():
+    client = MagicMock()
+    client.responses.create = AsyncMock(
+        return_value=_fake_responses_result("@jane posted about X last week", 1500, 300)
+    )
 
-    fake_llm.ainvoke.assert_awaited_once()
-    messages_arg = fake_llm.ainvoke.call_args.args[0]
-    assert messages_arg[0].content == "jane doe"
-    assert "jane" in content.lower()
+    tool = GrokXSearchTool(client=client, model="grok-4.20-reasoning")
+    content, artifact = await tool._arun(query="jane doe on X")
+
+    client.responses.create.assert_awaited_once()
+    kwargs = client.responses.create.call_args.kwargs
+    assert kwargs["model"] == "grok-4.20-reasoning"
+    assert kwargs["input"] == [{"role": "user", "content": "jane doe on X"}]
+    assert kwargs["tools"] == [{"type": "x_search"}]
+
+    assert content == "@jane posted about X last week"
     assert artifact["answer"] == "@jane posted about X last week"
+    # CappedTool relies on this exact artifact key shape.
+    assert artifact["_llm_usage"] == {"input_tokens": 1500, "output_tokens": 300}
 
 
 async def test_grok_x_metadata():
-    tool = GrokXSearchTool(llm=MagicMock())
+    tool = GrokXSearchTool(client=MagicMock())
     assert tool.name == "grok_x_search"
     assert tool.response_format == "content_and_artifact"
 ```
@@ -1297,13 +1354,11 @@ Expected: `ImportError`.
 - [ ] **Step 3: Implement `osint/tools/grok_x.py`**
 
 ```python
-import json
 import os
 from typing import Any, Type
 
-from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, PrivateAttr
 
 from osint.errors import ScanConfigError
@@ -1311,55 +1366,67 @@ from osint.errors import ScanConfigError
 
 class _GrokXInput(BaseModel):
     query: str = Field(description="What to search X for.")
-    max_results: int = Field(default=15, ge=1, le=30)
 
 
-def _make_llm(max_results: int) -> ChatOpenAI:
+def _default_client() -> AsyncOpenAI:
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
         raise ScanConfigError("XAI_API_KEY is not set")
-    return ChatOpenAI(
-        model="grok-4.20",
-        base_url="https://api.x.ai/v1",
-        api_key=api_key,
-        model_kwargs={
-            "extra_body": {
-                "search_parameters": {
-                    "mode": "on",
-                    "sources": [{"type": "x"}],
-                    "max_search_results": max_results,
-                },
-            },
-        },
-    )
+    return AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
 
 
 class GrokXSearchTool(BaseTool):
     name: str = "grok_x_search"
     description: str = (
-        "Search X (Twitter) for content relevant to a query, using Grok's Live "
-        "Search scoped to X sources. Use for X-native content (posts, profiles, "
-        "quotes) that Google-indexed scrapes miss."
+        "Search X (formerly Twitter) for content relevant to a query. Grok's "
+        "x_search server-side tool decides what to fetch from X — posts, "
+        "profiles, threads — and returns a synthesized answer plus citations. "
+        "Use this tool whenever the subject's X-native presence is in scope "
+        "(an X handle, an account on X, X posts about the subject). Other "
+        "platforms or general web content go through tavily_search instead."
     )
     args_schema: Type[BaseModel] = _GrokXInput
     response_format: str = "content_and_artifact"
 
-    _llm_override: Any = PrivateAttr(default=None)
+    _client: AsyncOpenAI | None = PrivateAttr(default=None)
+    _model: str = PrivateAttr(default="grok-4.20-reasoning")
 
-    def __init__(self, llm: Any | None = None):
+    def __init__(self, client: AsyncOpenAI | None = None, model: str = "grok-4.20-reasoning"):
         super().__init__()
-        self._llm_override = llm
+        self._client = client
+        self._model = model
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = _default_client()
+        return self._client
 
     def _run(self, *args, **kwargs):
         raise NotImplementedError("Use async invocation.")
 
-    async def _arun(self, query: str, max_results: int = 15, **_: Any) -> tuple[str, dict]:
-        # Rebuild the LLM per call so max_results (which is a search parameter)
-        # can vary per invocation. The ChatOpenAI instance is cheap.
-        llm = self._llm_override or _make_llm(max_results=max_results)
-        result = await llm.ainvoke([HumanMessage(content=query)])
-        answer = result.content or ""
-        artifact = {"answer": answer, "raw": result.model_dump()}
+    async def _arun(self, query: str, **_: Any) -> tuple[str, dict]:
+        # Responses API call. xAI's `x_search` is a server-side tool that the
+        # model invokes during reasoning; we don't have to drive it ourselves.
+        resp = await self.client.responses.create(
+            model=self._model,
+            input=[{"role": "user", "content": query}],
+            tools=[{"type": "x_search"}],
+        )
+        answer = getattr(resp, "output_text", None) or ""
+
+        # Capture token usage so CappedTool can fold it into the scan budget.
+        usage = getattr(resp, "usage", None)
+        llm_usage = {
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        } if usage is not None else {"input_tokens": 0, "output_tokens": 0}
+
+        artifact = {
+            "answer": answer,
+            "raw": resp.model_dump() if hasattr(resp, "model_dump") else None,
+            "_llm_usage": llm_usage,
+        }
         return answer, artifact
 ```
 
@@ -1490,6 +1557,23 @@ def test_system_prompt_contains_subject_and_tools():
     assert "```json" in p
 
 
+def test_system_prompt_routes_x_content_to_grok_x_when_enabled():
+    p = build_system_prompt(
+        subject="Jane",
+        tool_names=["tavily_search", "grok_x_search"],
+    )
+    # The prompt must explicitly tell the agent to use grok_x_search for X
+    # content rather than relying on tool-description inference.
+    assert "grok_x_search" in p
+    assert "X (Twitter)" in p or "X content" in p or "X-native" in p
+
+
+def test_system_prompt_omits_x_routing_when_grok_x_disabled():
+    p = build_system_prompt(subject="Jane", tool_names=["tavily_search", "maigret"])
+    # When grok_x_search isn't enabled, don't tell the LLM to use it.
+    assert "grok_x_search" not in p
+
+
 def test_synthesis_prompt_mentions_stop_reason():
     p = build_synthesis_prompt(stop_reason="budget")
     assert "budget" in p.lower()
@@ -1546,6 +1630,10 @@ Steps:
 
 Available tools: {tool_names}
 
+Routing guidance (use the right tool for the job, not whichever happens to
+match the description first):
+{routing_guidance}
+
 When you are ready to finish, return ONLY a single assistant message with NO
 tool calls, containing one fenced JSON block of this exact shape:
 
@@ -1567,6 +1655,17 @@ what the user will read, so populate it fully.
 """
 
 
+# Per-tool one-line routing rules, only included for tools actually enabled.
+_ROUTING_RULES = {
+    "tavily_search": "tavily_search — general web (news, blogs, personal sites, public profiles outside of X). The default for any open-web question.",
+    "tavily_extract": "tavily_extract — read the full content of a specific URL you already have. Use after a search hit looks promising.",
+    "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
+    "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
+    "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",
+    "grok_x_search": "grok_x_search — for ANY X (Twitter) content: posts about the subject, the subject's X profile, X threads. Don't use tavily_search for X content; X's public surface is poorly indexed by general web search and grok_x_search has direct access via xAI's x_search tool.",
+}
+
+
 SYNTHESIS_TEMPLATE = """\
 The scan was cut short. Reason: {stop_reason}.
 
@@ -1584,7 +1683,13 @@ shape:
 
 
 def build_system_prompt(subject: str, tool_names: list[str]) -> str:
-    return SYSTEM_TEMPLATE.format(subject=subject, tool_names=", ".join(tool_names))
+    rules = [f"- {_ROUTING_RULES[n]}" for n in tool_names if n in _ROUTING_RULES]
+    routing_guidance = "\n".join(rules) if rules else "- (no enabled tools have specific routing rules)"
+    return SYSTEM_TEMPLATE.format(
+        subject=subject,
+        tool_names=", ".join(tool_names),
+        routing_guidance=routing_guidance,
+    )
 
 
 def build_synthesis_prompt(stop_reason: str) -> str:

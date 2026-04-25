@@ -174,43 +174,44 @@ class GrokLLM:
 
 Implementation uses the `openai` async client pointed at xAI's endpoint (xAI's API is OpenAI-compatible for chat completions + tool use).
 
-### 6.5 `grok_x_search` tool — X-content retrieval
+### 6.5 `grok_x_search` tool — X-content retrieval via xAI's Responses API
 
-Main agent Grok calls are pure tool-use (no live search — we want deterministic, auditable tool dispatch from the agent). X-content retrieval happens through a *dedicated* tool:
+Main agent Grok calls are pure tool-use over Chat Completions (no implicit search — we want deterministic, auditable tool dispatch from the agent). X-content retrieval happens through a *dedicated* tool that uses xAI's **Responses API** with the server-side `x_search` tool.
+
+> Historical note: an earlier draft of this section used the `extra_body.search_parameters` form on Chat Completions. xAI deprecated that path on 2025-12-15 and replaced it with the Responses API + `x_search` server-side tool. We use the new path.
 
 ```python
-class GrokXSearchTool(Tool):
+class GrokXSearchTool(BaseTool):
     name = "grok_x_search"
-    description = "Search X (Twitter) for content relevant to the query..."
-    input_schema = {"query": str, "max_results": int}
-    tier = "paid"
-    vendor = "xai"
+    description = "Search X for content relevant to the query..."
+    args_schema = _GrokXInput   # {"query": str}
+    response_format = "content_and_artifact"
 
-    async def run(self, query: str, max_results: int = 20) -> dict:
-        # Separate Grok API call with Live Search enabled,
-        # sources restricted to X. Uses the same xAI OpenAI-compatible
-        # client as the main agent loop (shared `xai` vendor semaphore).
-        resp = await xai_client.chat.completions.create(
-            model="grok-4.20",
-            messages=[{"role": "user", "content": query}],
-            extra_body={
-                "search_parameters": {
-                    "mode": "on",
-                    "sources": [{"type": "x"}],
-                    "max_search_results": max_results,
-                },
-            },
+    async def _arun(self, query: str) -> tuple[str, dict]:
+        # Bare openai.AsyncOpenAI — Responses API isn't reachable through
+        # langchain-openai's ChatOpenAI in v1.
+        resp = await self.client.responses.create(
+            model="grok-4.20-reasoning",
+            input=[{"role": "user", "content": query}],
+            tools=[{"type": "x_search"}],
         )
-        return {
-            "answer": resp.choices[0].message.content,
-            "citations": resp.citations if hasattr(resp, "citations") else [],
+        answer = resp.output_text or ""
+        artifact = {
+            "answer": answer,
             "raw": resp.model_dump(),
+            "_llm_usage": {                                # see §6.8.1
+                "input_tokens":  int(resp.usage.input_tokens or 0),
+                "output_tokens": int(resp.usage.output_tokens or 0),
+            },
         }
+        return answer, artifact
 ```
 
-**Why a separate tool rather than live search on the main loop?** The main agent's job is to decide *what* to look for and route to the right tool. Enabling live search on the main loop would give the agent an opaque implicit capability whose URLs and sources we can't as cleanly log. A dedicated tool keeps X-content retrieval a deliberate, auditable action.
+**Why a separate tool rather than enabling search on the main loop?** The main agent's job is to decide *what* to look for and route to the right tool. Enabling implicit search on the main loop would give the agent an opaque capability whose source URLs and citations we couldn't as cleanly log against the entity graph. A dedicated tool keeps X-content retrieval a deliberate, auditable action and lets us toggle it independently per scan.
 
-**Deadlock note:** the `xai` semaphore is shared between the main loop's Grok calls and `grok_x_search`'s Grok calls. The main loop must release the `xai` slot before dispatching tools (standard pattern: semaphore wraps the API call only, not the surrounding work).
+**LLM accounting bypass.** Because this tool calls xAI directly via the OpenAI SDK and not through LangChain, our `LLMCostCallback` (§6.8.1) won't fire for it. The tool advertises its token usage in `artifact["_llm_usage"]`; `CappedTool` reads that key and feeds the counts into `ScanState` so the scan budget covers the tool's internal LLM call.
+
+**Routing.** The main agent's system prompt (§6.6 *no — we keep prompts in a dedicated module, not the spec; routing rules live there*) explicitly tells the LLM to use `grok_x_search` for X-native content rather than `tavily_search`, since X's public surface is poorly indexed by general web search.
 
 ### 6.6 Rate limiting
 
