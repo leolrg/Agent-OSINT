@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -18,11 +18,12 @@ async def write_scan_json(
 ) -> Path:
     scans_dir.mkdir(parents=True, exist_ok=True)
     path = scans_dir / f"{state.scan_id}.json"
-    now = datetime.now(timezone.utc).isoformat()
+    completed_at = datetime.now(timezone.utc)
+    created_at = completed_at - timedelta(seconds=state.wall_clock_elapsed)
     payload = {
         "scan_id": state.scan_id,
-        "created_at": now,
-        "completed_at": now,
+        "created_at": created_at.isoformat(),
+        "completed_at": completed_at.isoformat(),
         "status": status,
         "subject": state.subject,
         "extracted_identifiers": state.extracted_identifiers,

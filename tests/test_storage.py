@@ -40,3 +40,29 @@ async def test_write_scan_json(tmp_path: Path):
     assert data["llm_input_tokens"] == 5_000
     assert data["llm_output_tokens"] == 1_000
     assert data["total_cost_usd"] == 0.020
+
+
+async def test_write_scan_json_created_at_before_completed_at(tmp_path: Path):
+    state = ScanState(scan_id="t1", subject="Jane", config=ScanConfig())
+    # Simulate a scan that took ~2 seconds.
+    import time as _time
+    state.started_at = _time.monotonic() - 2.0
+    state.record_final_report({"summary": "x"})
+
+    path = await write_scan_json(tmp_path, state, status="done")
+    data = json.loads(path.read_text())
+
+    from datetime import datetime as _dt
+    created_at = _dt.fromisoformat(data["created_at"])
+    completed_at = _dt.fromisoformat(data["completed_at"])
+    delta = (completed_at - created_at).total_seconds()
+    # Should reflect the simulated ~2s elapsed, with a small tolerance.
+    assert 1.5 < delta < 2.5
+    assert data["duration_sec"] >= 2.0
+
+
+async def test_write_scan_json_failed_status(tmp_path: Path):
+    state = ScanState(scan_id="failed1", subject="Jane", config=ScanConfig())
+    path = await write_scan_json(tmp_path, state, status="failed")
+    data = json.loads(path.read_text())
+    assert data["status"] == "failed"
