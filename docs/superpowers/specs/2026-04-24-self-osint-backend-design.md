@@ -159,20 +159,64 @@ Adding a new tool = one file under `osint/tools/`, one class, one registry entry
 
 ### 6.4 LLM abstraction
 
-Single-vendor v1, but behind a Protocol so swap is a one-liner later:
+The main agent LLM is `langchain-openai`'s `ChatOpenAI`, which works against **any provider exposing an OpenAI Chat Completions-compatible `/v1/chat/completions` endpoint**: xAI Grok, OpenAI GPT, DeepSeek, Together, Groq, Ollama, vLLM, llama.cpp's server, and so on. Swapping LLM is a config change, not a code change.
+
+The model, base URL, API-key env var, and per-million-token pricing all travel together on `ScanConfig.llm`:
 
 ```python
-class LLM(Protocol):
-    async def call(self, messages, tools) -> LLMResponse: ...
-    async def synthesize(self, state) -> str: ...
+class LLMPricing(BaseModel):
+    input_per_mtok_usd: float = 2.0      # grok-4.20 default
+    output_per_mtok_usd: float = 6.0
 
-class GrokLLM:
-    """xAI Grok via OpenAI-compatible API at https://api.x.ai/v1."""
-    model: str = "grok-4.20"
+class LLMConfig(BaseModel):
+    model: str          = "grok-4.20"
+    base_url: str       = "https://api.x.ai/v1"
+    api_key_env_var: str = "XAI_API_KEY"
+    pricing: LLMPricing = LLMPricing()
+
+class ScanConfig(BaseModel):
     ...
+    llm: LLMConfig = LLMConfig()
 ```
 
-Implementation uses the `openai` async client pointed at xAI's endpoint (xAI's API is OpenAI-compatible for chat completions + tool use).
+`scan()` builds `ChatOpenAI(model=cfg.llm.model, base_url=cfg.llm.base_url, api_key=os.environ[cfg.llm.api_key_env_var])` from the config and hands it to LangGraph's prebuilt ReAct agent. Callers who want full control pass their own `BaseChatModel` instance via `scan(..., llm=...)`; otherwise the config-driven default is used.
+
+**Pricing is a per-scan field so token-cost accounting stays accurate after a swap.** Switching to GPT-5 without updating `LLMPricing` would mean the scan would over- or under-count cost. The `LLMConfig` defaults assume the default `model` (Grok 4.20). If you change `model`, change `pricing` to match.
+
+Examples:
+
+```python
+# Default (xAI Grok 4.20). Requires XAI_API_KEY in env.
+scan(subject, config=ScanConfig())
+
+# OpenAI GPT-5. Requires OPENAI_API_KEY.
+scan(subject, config=ScanConfig(llm=LLMConfig(
+    model="gpt-5",
+    base_url="https://api.openai.com/v1",
+    api_key_env_var="OPENAI_API_KEY",
+    pricing=LLMPricing(input_per_mtok_usd=2.50, output_per_mtok_usd=10.0),
+)))
+
+# DeepSeek Chat (cheap). Requires DEEPSEEK_API_KEY.
+scan(subject, config=ScanConfig(llm=LLMConfig(
+    model="deepseek-chat",
+    base_url="https://api.deepseek.com/v1",
+    api_key_env_var="DEEPSEEK_API_KEY",
+    pricing=LLMPricing(input_per_mtok_usd=0.27, output_per_mtok_usd=1.10),
+)))
+
+# Local Ollama (free). API-key env var still required by ChatOpenAI but value is ignored.
+scan(subject, config=ScanConfig(llm=LLMConfig(
+    model="qwen2.5:32b",
+    base_url="http://localhost:11434/v1",
+    api_key_env_var="OLLAMA_KEY",
+    pricing=LLMPricing(input_per_mtok_usd=0.0, output_per_mtok_usd=0.0),
+)))
+```
+
+The CLI exposes the same swap via `--llm-model`, `--llm-base-url`, `--llm-api-key-env`, `--llm-input-mtok-usd`, `--llm-output-mtok-usd` flags.
+
+**Tool-calling caveat.** The tool-use loop relies on the model returning structured `tool_calls` per the OpenAI tool-use spec. Most modern providers (OpenAI GPT-4+, Claude via the OpenAI-compat shim, Grok 3+, DeepSeek Chat, Llama 3.1 70B+ on Together/Groq) implement this correctly. Smaller models or older endpoints may not — the LangGraph ReAct agent will fail loudly if the model returns plain text where it should have returned `tool_calls`.
 
 ### 6.5 `apify_twitter` tool — X-content retrieval via Apify
 
@@ -283,7 +327,7 @@ Total scan cost has two sources and both must count against `budget_usd`, otherw
 
 **Tool cost.** Each tool declares an `est_cost_usd_per_call`. The scan's running tool cost is the sum across all dispatched calls (including failed ones — the vendor still charged). All v1 tools route through vendor APIs that don't share token usage with the main agent's LLM, so there is no double-counting between tool cost and LLM cost.
 
-**LLM cost.** Every ReAct turn makes an LLM call. A LangChain callback captures `input_tokens` and `output_tokens` from each response's `usage_metadata` / `token_usage` block and accumulates them on `ScanState`. The cost is computed from a pricing table on `ScanConfig`:
+**LLM cost.** Every ReAct turn makes an LLM call. A LangChain callback captures `input_tokens` and `output_tokens` from each response's `usage_metadata` / `token_usage` block and accumulates them on `ScanState`. The cost is computed from `ScanConfig.llm.pricing` (an `LLMPricing` model — see §6.4 for the surrounding `LLMConfig`):
 
 ```python
 class LLMPricing(BaseModel):
@@ -291,7 +335,7 @@ class LLMPricing(BaseModel):
     output_per_mtok_usd: float = 6.0    # grok-4.20 default (2026-04)
 ```
 
-These defaults are informed by xAI's public pricing page at the time of writing; callers should override when model or pricing changes. The callback is registered on both the main ReAct agent and the synthesis call, so the budget is enforced end-to-end.
+Defaults reflect Grok 4.20 because that's the default `LLMConfig.model`. If a caller swaps the model (e.g. to GPT-5 or DeepSeek), they must set `pricing` accordingly or budget enforcement will be miscalibrated. The callback is registered on both the main ReAct agent and the synthesis call, so the budget is enforced end-to-end.
 
 **`total_cost_usd`** on `ScanState` is `tool_cost_usd + llm_cost_usd`. `should_stop()` compares this against `budget_usd`. The per-scan JSON output stores all three components plus the raw token counts so cost breakdowns are auditable.
 

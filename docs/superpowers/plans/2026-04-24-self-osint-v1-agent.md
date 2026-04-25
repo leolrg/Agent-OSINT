@@ -147,7 +147,7 @@ git commit -m "chore: scaffold osint package with langgraph deps"
 Create `tests/test_types.py`:
 
 ```python
-from osint.types import LLMPricing, ScanConfig
+from osint.types import LLMConfig, LLMPricing, ScanConfig
 
 
 def test_scanconfig_defaults():
@@ -158,9 +158,12 @@ def test_scanconfig_defaults():
     assert c.max_wall_clock_sec == 600
     assert c.tool_concurrency == {"maigret": 2}
     assert c.tool_options == {}
-    # grok-4.20 public pricing as of 2026-04 (xAI docs).
-    assert c.llm_pricing.input_per_mtok_usd == 2.0
-    assert c.llm_pricing.output_per_mtok_usd == 6.0
+    # grok-4.20 default pointing at xAI's OpenAI-compatible endpoint.
+    assert c.llm.model == "grok-4.20"
+    assert c.llm.base_url == "https://api.x.ai/v1"
+    assert c.llm.api_key_env_var == "XAI_API_KEY"
+    assert c.llm.pricing.input_per_mtok_usd == 2.0
+    assert c.llm.pricing.output_per_mtok_usd == 6.0
 
 
 def test_scanconfig_rejects_nonpositive_caps():
@@ -174,16 +177,29 @@ def test_scanconfig_rejects_nonpositive_caps():
         ScanConfig(max_wall_clock_sec=0)
 
 
-def test_scanconfig_overrides():
+def test_scanconfig_swap_llm_to_openai_gpt():
+    """ScanConfig accepts any OpenAI-compatible chat completions endpoint."""
+    c = ScanConfig(
+        llm=LLMConfig(
+            model="gpt-5",
+            base_url="https://api.openai.com/v1",
+            api_key_env_var="OPENAI_API_KEY",
+            pricing=LLMPricing(input_per_mtok_usd=2.50, output_per_mtok_usd=10.0),
+        ),
+    )
+    assert c.llm.model == "gpt-5"
+    assert c.llm.api_key_env_var == "OPENAI_API_KEY"
+    assert c.llm.pricing.input_per_mtok_usd == 2.50
+
+
+def test_scanconfig_overrides_other_fields():
     c = ScanConfig(
         enabled_tools={"tavily_search"},
         budget_usd=1.0,
         tool_options={"maigret": {"proxy_url": "http://p:8080"}},
-        llm_pricing=LLMPricing(input_per_mtok_usd=3.0, output_per_mtok_usd=15.0),
     )
     assert c.enabled_tools == {"tavily_search"}
     assert c.tool_options["maigret"]["proxy_url"] == "http://p:8080"
-    assert c.llm_pricing.input_per_mtok_usd == 3.0
 ```
 
 - [ ] **Step 2: Run to confirm failure**
@@ -213,6 +229,19 @@ class LLMPricing(BaseModel):
     output_per_mtok_usd: NonNegativeFloat = 6.0
 
 
+class LLMConfig(BaseModel):
+    """Configuration for the main agent LLM.
+
+    Any provider exposing an OpenAI-compatible /v1/chat/completions endpoint
+    works (xAI Grok, OpenAI GPT, DeepSeek, Together, Groq, Ollama, vLLM,
+    llama.cpp's server, ...). Defaults target xAI's Grok 4.20.
+    """
+    model: str = "grok-4.20"
+    base_url: str = "https://api.x.ai/v1"
+    api_key_env_var: str = "XAI_API_KEY"
+    pricing: LLMPricing = Field(default_factory=LLMPricing)
+
+
 class ScanConfig(BaseModel):
     enabled_tools: set[str] = Field(default_factory=default_enabled_tools)
     budget_usd: PositiveFloat = 5.0
@@ -220,7 +249,7 @@ class ScanConfig(BaseModel):
     max_wall_clock_sec: PositiveInt = 600
     tool_concurrency: dict[str, int] = Field(default_factory=default_tool_concurrency)
     tool_options: dict[str, dict] = Field(default_factory=dict)
-    llm_pricing: LLMPricing = Field(default_factory=LLMPricing)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
 ```
 
 - [ ] **Step 4: Run tests — expect pass**
@@ -478,7 +507,7 @@ class ScanState:
 
     @property
     def llm_cost_usd(self) -> float:
-        p = self.config.llm_pricing
+        p = self.config.llm.pricing
         return (
             self.llm_input_tokens * p.input_per_mtok_usd / 1_000_000
             + self.llm_output_tokens * p.output_per_mtok_usd / 1_000_000
@@ -2174,13 +2203,23 @@ from osint.tools import build_tools
 from osint.types import ScanConfig, ScanResult
 
 
-def _default_llm() -> ChatOpenAI:
-    key = os.environ.get("XAI_API_KEY")
+def _default_llm(cfg) -> ChatOpenAI:
+    """Build the main agent LLM from a ScanConfig.
+
+    `ChatOpenAI` accepts any OpenAI Chat Completions-compatible endpoint via
+    `base_url`. This makes the LLM swappable across vendors (xAI, OpenAI,
+    DeepSeek, Together, Groq, Ollama, vLLM, ...) without changing any of
+    the rest of the pipeline.
+    """
+    key = os.environ.get(cfg.llm.api_key_env_var)
     if not key:
-        raise ScanConfigError("XAI_API_KEY is not set")
+        raise ScanConfigError(
+            f"{cfg.llm.api_key_env_var} is not set "
+            f"(required by LLM model '{cfg.llm.model}' at {cfg.llm.base_url})"
+        )
     return ChatOpenAI(
-        model="grok-4.20",
-        base_url="https://api.x.ai/v1",
+        model=cfg.llm.model,
+        base_url=cfg.llm.base_url,
         api_key=key,
     )
 
@@ -2219,7 +2258,7 @@ async def scan(
         raise ValueError("subject must be a non-empty description")
     configure_logging()
 
-    llm = llm or _default_llm()
+    llm = llm or _default_llm(config)
     state = ScanState(scan_id=new_scan_id(), subject=subject, config=config)
     logger.info("scan.start", scan_id=state.scan_id, enabled_tools=sorted(config.enabled_tools))
 
@@ -2368,6 +2407,41 @@ async def test_cli_exits_nonzero_on_empty_subject(tmp_path: Path):
     with pytest.raises(SystemExit) as exc:
         await main(["scan", "  ", "--scans-dir", str(tmp_path)])
     assert exc.value.code != 0
+
+
+async def test_cli_swaps_llm_via_flags(tmp_path: Path):
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main([
+            "scan", "Jane",
+            "--scans-dir", str(tmp_path),
+            "--llm-model", "gpt-5",
+            "--llm-base-url", "https://api.openai.com/v1",
+            "--llm-api-key-env", "OPENAI_API_KEY",
+            "--llm-input-mtok-usd", "2.5",
+            "--llm-output-mtok-usd", "10.0",
+        ])
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.llm.model == "gpt-5"
+    assert cfg.llm.base_url == "https://api.openai.com/v1"
+    assert cfg.llm.api_key_env_var == "OPENAI_API_KEY"
+    assert cfg.llm.pricing.input_per_mtok_usd == 2.5
+    assert cfg.llm.pricing.output_per_mtok_usd == 10.0
+
+
+async def test_cli_keeps_default_llm_when_no_flags(tmp_path: Path):
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.llm.model == "grok-4.20"
+    assert cfg.llm.api_key_env_var == "XAI_API_KEY"
 ```
 
 - [ ] **Step 2: Run — expect failure**
@@ -2384,7 +2458,7 @@ import sys
 from pathlib import Path
 
 from osint.scan import scan
-from osint.types import ScanConfig
+from osint.types import LLMConfig, LLMPricing, ScanConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -2400,7 +2474,48 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-seconds", type=int, default=600)
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
+    # LLM swap. Any OpenAI-compatible chat completions endpoint works.
+    s.add_argument("--llm-model", default=None,
+                   help="LLM model name (default: grok-4.20).")
+    s.add_argument("--llm-base-url", default=None,
+                   help="OpenAI-compatible chat-completions base URL "
+                        "(default: https://api.x.ai/v1). Examples: "
+                        "https://api.openai.com/v1, https://api.deepseek.com/v1, "
+                        "http://localhost:11434/v1.")
+    s.add_argument("--llm-api-key-env", default=None,
+                   help="Env var that holds the API key for the LLM "
+                        "(default: XAI_API_KEY).")
+    s.add_argument("--llm-input-mtok-usd", type=float, default=None,
+                   help="Per-million-input-token cost in USD; defaults to grok-4.20 ($2.0). "
+                        "Set this when swapping models so budget enforcement stays honest.")
+    s.add_argument("--llm-output-mtok-usd", type=float, default=None,
+                   help="Per-million-output-token cost in USD; defaults to grok-4.20 ($6.0).")
     return parser
+
+
+def _llm_config_from_args(args) -> LLMConfig | None:
+    """Build an LLMConfig only if the user passed at least one --llm-* flag.
+
+    Otherwise return None and let ScanConfig's default kick in. Pricing
+    fields default to LLMPricing's defaults if either rate flag is omitted.
+    """
+    flags = [args.llm_model, args.llm_base_url, args.llm_api_key_env,
+             args.llm_input_mtok_usd, args.llm_output_mtok_usd]
+    if all(f is None for f in flags):
+        return None
+    base = LLMConfig()
+    pricing = LLMPricing(
+        input_per_mtok_usd=args.llm_input_mtok_usd if args.llm_input_mtok_usd is not None
+                           else base.pricing.input_per_mtok_usd,
+        output_per_mtok_usd=args.llm_output_mtok_usd if args.llm_output_mtok_usd is not None
+                            else base.pricing.output_per_mtok_usd,
+    )
+    return LLMConfig(
+        model=args.llm_model or base.model,
+        base_url=args.llm_base_url or base.base_url,
+        api_key_env_var=args.llm_api_key_env or base.api_key_env_var,
+        pricing=pricing,
+    )
 
 
 async def main(argv: list[str] | None = None) -> int:
@@ -2419,6 +2534,9 @@ async def main(argv: list[str] | None = None) -> int:
     }
     if args.enable:
         kwargs["enabled_tools"] = set(args.enable)
+    llm_cfg = _llm_config_from_args(args)
+    if llm_cfg is not None:
+        kwargs["llm"] = llm_cfg
 
     result = await scan(
         subject=subject,
@@ -2444,13 +2562,15 @@ Overwrite `osint/__init__.py`:
 ```python
 from osint.errors import ScanConfigError, ScanStopped
 from osint.scan import scan
-from osint.types import ScanConfig, ScanResult, ToolCallRecord
+from osint.types import LLMConfig, LLMPricing, ScanConfig, ScanResult, ToolCallRecord
 
 __all__ = [
     "scan",
     "ScanConfig",
     "ScanResult",
     "ToolCallRecord",
+    "LLMConfig",
+    "LLMPricing",
     "ScanConfigError",
     "ScanStopped",
 ]
