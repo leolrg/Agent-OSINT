@@ -1,0 +1,33 @@
+[project]
+name = "osint"
+version = "0.1.0"
+description = "Self-OSINT backend — v1 LangGraph agent"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.5",
+    "langgraph>=0.2.60",
+    "langchain-core>=0.3.20",
+    "langchain-openai>=0.2.10",
+    "langchain-tavily>=0.1.0",
+    "apify-client>=1.7",
+    "maigret>=0.4.4",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.12",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["osint*"]
