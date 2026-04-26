@@ -233,9 +233,48 @@ def format_tool_calls_compact(tool_calls, max_chars: int = 15000) -> str:
                     # web_extract-style: URL + first ~600 chars of raw_content.
                     lines.append(f"  - {url} | raw: {str(raw)[:600]}")
                     search_rendered = True
-            if not search_rendered:
-                # Generic fallback for outputs without a results[] structure
-                # (e.g. apify_*, maigret). Compact JSON-ish dump.
+            if not search_rendered and isinstance(out.get("items"), list):
+                # Apify Twitter / Instagram / Maigret all return {"items": [...]}.
+                # Render up to 5 items using a heuristic field-priority so each
+                # source family (profiles, posts, per-site results) shows
+                # whatever it has.
+                items = out["items"]
+                for it in items[:5]:
+                    if not isinstance(it, dict):
+                        lines.append(f"  - {str(it)[:200]}")
+                        continue
+                    bits: list[str] = []
+                    # Profile-shaped fields first.
+                    for field in ("username", "fullName", "name", "screen_name", "handle"):
+                        v = it.get(field)
+                        if v:
+                            bits.append(
+                                f"@{v}"
+                                if field in ("username", "screen_name", "handle")
+                                else str(v)
+                            )
+                            break
+                    # Bio-shaped fields next.
+                    for field in ("biography", "bio", "description"):
+                        v = it.get(field)
+                        if v:
+                            bits.append(str(v)[:200])
+                            break
+                    # Content-shaped fields (tweet/post text) last.
+                    for field in ("text", "full_text", "tweet", "raw_content", "title"):
+                        v = it.get(field)
+                        if v:
+                            bits.append(str(v)[:300])
+                            break
+                    url = it.get("url") or it.get("permalink") or it.get("link") or ""
+                    if url:
+                        bits.insert(0, str(url))
+                    lines.append("  - " + " | ".join(bits) if bits else f"  - {str(it)[:200]}")
+                if len(items) > 5:
+                    lines.append(f"  …and {len(items) - 5} more items (truncated)")
+            elif not search_rendered:
+                # Generic fallback for outputs without a results[] or items[]
+                # structure. Compact JSON-ish dump.
                 lines.append(f"  (output: {str(out)[:300]})")
 
     out_str = "\n".join(lines)

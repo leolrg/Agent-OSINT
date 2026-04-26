@@ -88,7 +88,11 @@ async def test_synthesize_promotes_raw_snippet_handle_when_findings_miss_it():
     We don't run a real LLM — we hand-craft an AIMessage that quotes the
     snippet, then verify it lands in the parsed report. This pins the
     plumbing (tool_calls reaches the prompt + the parser surfaces it),
-    not real LLM behavior."""
+    not real LLM behavior. Beyond the round-trip, we also spy on the
+    LLM input itself to ensure format_tool_calls_compact actually wrote
+    `Semona0x` and `tc-zhihu` into the user message — without that
+    assertion, this test would still pass even if the tool_calls block
+    were silently dropped from the prompt."""
     # Canned tool_call: a tavily_search result with the inline reveal.
     canned_tool_call = {
         "tool": "tavily_search",
@@ -112,7 +116,21 @@ async def test_synthesize_promotes_raw_snippet_handle_when_findings_miss_it():
         "\"Simon Wen. 纽约｜05｜大一xhs/twitter:Semona0x\".\n\n"
         "```json\n{\"extracted_identifiers\": {\"usernames\": [\"Semona0x\"]}}\n```"
     )
-    fake = BindableFake(responses=[AIMessage(content=promoted_report, tool_calls=[])])
+
+    # Spy on what the synthesizer actually feeds into the LLM. We don't
+    # subclass FakeMessagesListChatModel here because pydantic-validated
+    # field discipline makes ad-hoc capture attributes awkward; a plain
+    # AsyncMock with bind_tools+ainvoke is cleaner.
+    captured: list[list] = []
+
+    async def fake_ainvoke(msgs, config=None, **kwargs):
+        captured.append(list(msgs))
+        return AIMessage(content=promoted_report, tool_calls=[])
+
+    fake = MagicMock()
+    fake.bind_tools = MagicMock(return_value=fake)
+    fake.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+
     parsed = await synthesize(
         subject="Simon Wen",
         findings=[],          # processor missed it: no finding recorded
@@ -120,7 +138,20 @@ async def test_synthesize_promotes_raw_snippet_handle_when_findings_miss_it():
         llm=fake,
         cost_cb=MagicMock(),
     )
-    # The handle promoted from raw snippet must reach the report text...
+
+    # 1. Plumbing assertion: format_tool_calls_compact must have rendered
+    #    the handle and tool_call_id into the user-message content.
+    assert captured, "synthesize() should have called llm.ainvoke at least once"
+    sent_msgs = captured[0]
+    user_msg_content = next(
+        m.content for m in sent_msgs if m.__class__.__name__ == "HumanMessage"
+    )
+    assert "Semona0x" in user_msg_content, (
+        "tool_calls block must reach the synthesizer's user message"
+    )
+    assert "tc-zhihu" in user_msg_content, "tool_call_id must reach the prompt"
+
+    # 2. Round-trip assertion: the handle must end up in the parsed
+    #    report text and the extracted-identifiers tail JSON.
     assert "Semona0x" in parsed["report"]["text"]
-    # ...and the extracted-identifiers tail JSON.
     assert parsed["extracted_identifiers"] == {"usernames": ["Semona0x"]}
