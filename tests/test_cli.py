@@ -217,3 +217,16 @@ async def test_invalid_osint_llm_rate_env_var_errors_clearly(tmp_path: Path, mon
     with pytest.raises(SystemExit) as exc:
         await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
     assert "OSINT_LLM_INPUT_MTOK_USD" in str(exc.value)
+
+
+def test_cli_agent_flag_overrides_default(monkeypatch):
+    """--agent leadqueue_v2 sets ScanConfig.agent_version."""
+    from osint.cli import _build_args
+    args = _build_args(["scan", "Jane", "--agent", "leadqueue_v2"])
+    assert args.agent == "leadqueue_v2"
+
+
+def test_cli_agent_flag_default_is_react_v1(monkeypatch):
+    from osint.cli import _build_args
+    args = _build_args(["scan", "Jane"])
+    assert args.agent == "react_v1"

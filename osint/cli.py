@@ -29,6 +29,14 @@ def _build_parser() -> argparse.ArgumentParser:
                         "caps apply to the WHOLE scan, not per-pass — so if "
                         "you bump --passes you may also want a higher "
                         "--budget-usd / --max-calls. Default: 1.")
+    s.add_argument(
+        "--agent",
+        choices=["react_v1", "leadqueue_v2"],
+        default="react_v1",
+        help="Agent runner. react_v1 = ReAct loop with multi-pass deepen "
+             "(default; behaves like before this flag existed). "
+             "leadqueue_v2 = priority-queue investigation with verifier loop.",
+    )
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
     s.add_argument("--env-file", type=Path, default=None,
@@ -135,9 +143,13 @@ def _resolve_llm_config(args) -> LLMConfig | None:
     )
 
 
-async def main(argv: list[str] | None = None) -> int:
+def _build_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    args = _build_args(argv)
 
     # Load .env if present. CLI-only — the library (osint.scan) stays free of
     # filesystem side effects on import. override=False so an exported shell
@@ -160,6 +172,7 @@ async def main(argv: list[str] | None = None) -> int:
         "max_wall_clock_sec": args.max_seconds,
         "passes": args.passes,
     }
+    kwargs["agent_version"] = args.agent
     if args.enable:
         kwargs["enabled_tools"] = set(args.enable)
     llm_cfg = _resolve_llm_config(args)
