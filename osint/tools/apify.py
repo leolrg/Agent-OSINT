@@ -47,7 +47,7 @@ from osint.errors import ScanConfigError
 # maintained one ($10 / 1k profiles).
 DEFAULT_IG_ACTOR = "apify~instagram-scraper"
 DEFAULT_LI_ACTOR = "dev_fusion~linkedin-profile-scraper"
-DEFAULT_TW_ACTOR = "apidojo~twitter-scraper-lite"
+DEFAULT_TW_ACTOR = "gentle_cloud~twitter-tweets-scraper"
 
 
 async def _run_actor(
@@ -313,11 +313,27 @@ class ApifyTwitterTool(BaseTool):
                 "`search_query` (got both or neither)."
             )
 
-        run_input: dict[str, Any] = {"maxItems": max_items}
+        # gentle_cloud~twitter-tweets-scraper input shape (verified live
+        # 2026-04-26 against real @semona0x lookups). Required fields:
+        #   start_urls   — list of {"url": "https://x.com/<handle>"} entries
+        #   since_date   — REQUIRED. If omitted the actor's date filter drops
+        #                  every tweet and the dataset returns simulation
+        #                  placeholders ({"_simulation": true ...}). 2020-01-01
+        #                  is wide enough for any real account history.
+        #   result_count — string-typed cap on returned tweets.
+        # We swapped from apidojo~twitter-scraper-lite which silently returns
+        # demo data ({"demo": true}) on STARTER-plan accounts — the actor
+        # errors with "Access to this origin is disabled" but reports
+        # SUCCEEDED, so the agent treats placeholders as real data.
         if handle:
-            run_input["twitterHandles"] = [handle]
+            url = f"https://x.com/{handle.lstrip('@')}"
         else:
-            run_input["searchTerms"] = [search_query]
+            url = f"https://x.com/search?q={search_query}&src=typed_query"
+        run_input: dict[str, Any] = {
+            "start_urls": [{"url": url}],
+            "since_date": "2020-01-01",
+            "result_count": str(max_items),
+        }
 
         result = await _run_actor(self.client, self.actor_id, run_input)
         content = json.dumps(

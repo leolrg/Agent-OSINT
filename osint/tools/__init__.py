@@ -32,9 +32,14 @@ _COSTS = {
     # apify/linkedin-profile-scraper (dev_fusion): $10.00 per 1,000 profiles.
     # One call = 1 profile = $0.01.
     "apify_linkedin": 0.01,
-    # apidojo/twitter-scraper-lite: ~$0.016 per standard query (covers up to
-    # ~40 tweets). Round up for safety.
-    "apify_twitter": 0.02,
+    # gentle_cloud/twitter-tweets-scraper: per-actor-compute pricing.
+    # Empirically ~$0.04 per call on STARTER plan (cookie-rotation overhead);
+    # rounded up for safety. Switched from apidojo~twitter-scraper-lite which
+    # silently returns demo data ({"demo": true}) on our account: the actor
+    # errors with "Access to this origin is disabled" but reports SUCCEEDED,
+    # so the agent treats placeholder data as real. Verified 2026-04-26
+    # against real @semona0x lookups.
+    "apify_twitter": 0.04,
 }
 
 

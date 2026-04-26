@@ -231,7 +231,14 @@ async def _run_one_pass(
 
     if stop_reason is None and agent_result is not None:
         final_text = _extract_final_text(agent_result)
-        return parse_report(final_text), None
+        if final_text.strip():
+            return parse_report(final_text), None
+        # Grok-4.20 reasoning mode occasionally finishes with
+        # finish_reason="stop" but completion_tokens=0 — burns reasoning,
+        # emits nothing. Falling through to the synthesis path lets the
+        # scan still produce a report from the tool log instead of
+        # storing an empty report.
+        stop_reason = StopReason.EMPTY_FINAL
 
     # Cap-cut path: synthesize from what we have and return.
     logger.info(

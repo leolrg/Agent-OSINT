@@ -61,24 +61,33 @@ async def test_apify_linkedin_runs_actor():
 
 
 async def test_apify_twitter_handle_mode_runs_actor():
-    client, actor, dataset = _fake_client([{"author": {"userName": "jdoe"}, "text": "hi"}])
-    tool = ApifyTwitterTool(client=client, actor_id="apidojo~twitter-scraper-lite")
+    client, actor, dataset = _fake_client(
+        [{"full_text": "hi", "url": "https://x.com/jdoe/status/1"}]
+    )
+    tool = ApifyTwitterTool(client=client, actor_id="gentle_cloud~twitter-tweets-scraper")
     content, artifact = await tool._arun(handle="jdoe", max_items=25)
     run_input = actor.call.call_args.kwargs["run_input"]
-    assert run_input["twitterHandles"] == ["jdoe"]
-    assert run_input["maxItems"] == 25
-    assert "searchTerms" not in run_input
-    assert artifact["items"][0]["text"] == "hi"
+    # gentle_cloud uses start_urls + since_date + result_count. Without
+    # since_date the actor's filter drops every tweet and the dataset comes
+    # back as simulation placeholders. result_count is string-typed per the
+    # actor schema. Verified live 2026-04 against @semona0x.
+    assert run_input["start_urls"] == [{"url": "https://x.com/jdoe"}]
+    assert run_input["result_count"] == "25"
+    assert run_input["since_date"]  # required to avoid simulation fallback
+    assert artifact["items"][0]["full_text"] == "hi"
 
 
 async def test_apify_twitter_search_mode_runs_actor():
-    client, actor, dataset = _fake_client([{"text": "hello"}])
-    tool = ApifyTwitterTool(client=client, actor_id="apidojo~twitter-scraper-lite")
+    client, actor, dataset = _fake_client([{"full_text": "hello"}])
+    tool = ApifyTwitterTool(client=client, actor_id="gentle_cloud~twitter-tweets-scraper")
     await tool._arun(search_query="jane doe", max_items=10)
     run_input = actor.call.call_args.kwargs["run_input"]
-    assert run_input["searchTerms"] == ["jane doe"]
-    assert run_input["maxItems"] == 10
-    assert "twitterHandles" not in run_input
+    # Search mode is best-effort: gentle_cloud has no first-class search
+    # parameter, so we route to x.com/search?q=... as a profile URL. Works
+    # for keyword and `from:<handle>` queries; advanced operators are flaky.
+    assert run_input["start_urls"][0]["url"].startswith("https://x.com/search?q=")
+    assert "jane doe" in run_input["start_urls"][0]["url"]
+    assert run_input["result_count"] == "10"
 
 
 async def test_apify_twitter_requires_handle_or_query():

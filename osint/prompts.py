@@ -72,6 +72,29 @@ Search-and-extract pattern
   e. If you find a URL that contains hyperlink that likely leads to more information (e.g. a profile page that links to their personal website, or a news article that mentions an interview), add that URL as a new search vector and investigate it in the same way.
   f. If the search is unsatisfactory try MANY variations of the search query because searching api is not perfect.
 
+SHOTGUN QUERY TEMPLATE — for any subject, run this exact query shape at
+least once. It is the single most reliable way to surface CN-platform
+profile snippets where users inline-mention their handles on other
+platforms (e.g. a Zhihu/Weibo bio that contains `xhs/twitter：<handle>`):
+
+    "<EnglishName>" OR "<NativeName>" (LinkedIn OR github OR twitter OR instagram OR weibo OR zhihu) <City>
+
+Phrasing matters — Tavily's ranking is sensitive to small changes:
+  - Exactly TWO quoted name variants joined by OR; do NOT add a third.
+  - The platform list goes in ONE parenthesized OR group of 5–6 platforms.
+    Mix CN platforms (zhihu, weibo, xiaohongshu) with English platforms
+    (LinkedIn, GitHub, Twitter, Instagram).
+  - The city / locality token goes at the END as a bare word — NOT in
+    parens. This anchors ranking without diluting other signal.
+  - Re-ordering the OR groups, parenthesizing the locality, or stacking
+    extra context tokens often drops the right snippet from the top 10.
+
+After this query, READ EACH SNIPPET CAREFULLY for inline handle reveals
+(`xhs/twitter：<handle>`, `小红书：<handle>`, `@<handle>`, ENS-style
+`<handle>.eth`). A handle exposed in a snippet is the highest-value
+signal in any modern OSINT investigation — once you have one, run
+apify_twitter (handle mode) and apify_instagram on it immediately.
+
 HARD QUOTAS — these are not suggestions. The single biggest reason past
 scans have been shallow is that the agent skips extract calls and pivots
 too soon. Numerical commitment is the fix:

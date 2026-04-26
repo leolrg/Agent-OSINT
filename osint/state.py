@@ -12,6 +12,7 @@ class StopReason(str, Enum):
     MAX_CALLS = "max_calls"
     WALL_CLOCK = "wall_clock"
     FINAL_REPORT = "final_report"
+    EMPTY_FINAL = "empty_final"
 
 
 @dataclass
