@@ -44,6 +44,7 @@ async def test_cli_passes_subject_to_scan(tmp_path: Path):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "Jane Doe, jane@e, @jdoe", "--scans-dir", str(tmp_path)])
@@ -56,6 +57,7 @@ async def test_cli_reads_stdin_when_no_arg(tmp_path: Path, monkeypatch):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("Jane from stdin"))
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
@@ -73,6 +75,7 @@ async def test_cli_swaps_llm_via_flags(tmp_path: Path):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main([
@@ -96,6 +99,7 @@ async def test_cli_keeps_default_llm_when_no_flags(tmp_path: Path):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
@@ -114,6 +118,7 @@ async def test_cli_loads_env_file_when_flag_passed(tmp_path: Path, monkeypatch):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)):
         await main(["scan", "Jane", "--scans-dir", str(tmp_path),
@@ -131,6 +136,7 @@ async def test_cli_env_file_does_not_override_shell_env(tmp_path: Path, monkeypa
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)):
         await main(["scan", "Jane", "--scans-dir", str(tmp_path),
@@ -149,6 +155,7 @@ async def test_osint_llm_env_vars_set_default_llm(tmp_path: Path, monkeypatch):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "Jane", "--scans-dir", str(tmp_path)])
@@ -169,6 +176,7 @@ async def test_cli_flag_overrides_osint_llm_env(tmp_path: Path, monkeypatch):
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main([
@@ -190,6 +198,7 @@ async def test_partial_osint_llm_env_keeps_other_defaults(tmp_path: Path, monkey
     fake = type("R", (), {})()
     fake.scan_id = "sid"
     fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
     (tmp_path / "sid.json").write_text("{}")
     with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
         await main(["scan", "Jane", "--scans-dir", str(tmp_path)])

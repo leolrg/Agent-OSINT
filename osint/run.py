@@ -43,7 +43,7 @@ from osint.prompts import (
     parse_report,
 )
 from osint.state import ScanState, StopReason
-from osint.storage import new_scan_id, write_scan_json
+from osint.storage import new_scan_id, write_scan_json, write_scan_markdown
 from osint.tools import build_tools
 from osint.types import ScanConfig, ScanResult
 
@@ -157,6 +157,18 @@ async def scan(
             state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
 
         path = await write_scan_json(scans_dir, state, status="done")
+        # Companion human-readable render. JSON stays the source of truth;
+        # if the markdown write fails for any reason, log it but don't fail
+        # the scan — the JSON is enough to reconstruct everything later.
+        markdown_path: Path | None = None
+        try:
+            markdown_path = await write_scan_markdown(scans_dir, state, status="done")
+        except Exception as md_err:
+            logger.warning(
+                "scan.markdown_write_failed",
+                scan_id=state.scan_id,
+                error=repr(md_err),
+            )
         logger.info(
             "scan.done",
             scan_id=state.scan_id,
@@ -177,6 +189,7 @@ async def scan(
             total_cost_usd=state.total_cost_usd,
             duration_sec=state.wall_clock_elapsed,
             path=path,
+            markdown_path=markdown_path,
         )
     except Exception:
         # Best-effort: persist whatever state we have so the failure is
@@ -185,6 +198,7 @@ async def scan(
         # secondary one — the original is what the caller needs to see).
         try:
             await write_scan_json(scans_dir, state, status="failed")
+            await write_scan_markdown(scans_dir, state, status="failed")
         except Exception as secondary:
             logger.error(
                 "scan.failed_write_failed",

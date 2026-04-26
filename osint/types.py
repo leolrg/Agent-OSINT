@@ -58,4 +58,5 @@ class ScanResult(BaseModel):
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)
     total_cost_usd: float = 0.0
     duration_sec: float = 0.0
-    path: Path
+    path: Path                              # the .json artifact (source of truth)
+    markdown_path: Path | None = None       # the .md sibling (human-readable render)

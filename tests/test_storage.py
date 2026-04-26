@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from osint.state import ScanState
-from osint.storage import new_scan_id, write_scan_json
+from osint.storage import new_scan_id, write_scan_json, write_scan_markdown
 from osint.types import ScanConfig, ToolCallRecord
 
 
@@ -66,3 +66,70 @@ async def test_write_scan_json_failed_status(tmp_path: Path):
     path = await write_scan_json(tmp_path, state, status="failed")
     data = json.loads(path.read_text())
     assert data["status"] == "failed"
+
+
+async def test_write_scan_markdown_renders_prose_report(tmp_path: Path):
+    state = ScanState(scan_id="md1", subject="Jane Doe, NYC", config=ScanConfig())
+    now = datetime.now(timezone.utc)
+    state.record_tool_call(ToolCallRecord(
+        turn=1, tool="tavily_search", tool_call_id="c1",
+        input={"query": "Jane Doe NYC"}, output={"results": [{"url": "https://x"}]},
+        raw={"results": []},
+        started_at=now, completed_at=now, cost_usd=0.008,
+    ))
+    state.record_llm_usage(input_tokens=2_000, output_tokens=500)
+    state.record_final_report(
+        {"text": "**Executive Summary**\n\nJane Doe is...\n\n**Sources**\n- tavily_search ..."},
+        identifiers={"emails": ["jane@example.com"], "urls": ["https://x"]},
+    )
+
+    path = await write_scan_markdown(tmp_path, state, status="done")
+
+    assert path == tmp_path / "md1.md"
+    md = path.read_text(encoding="utf-8")
+
+    # Header / metadata
+    assert "# Scan `md1`" in md
+    assert "**Subject:** Jane Doe, NYC" in md
+    assert "**Status:** done" in md
+    assert "**Tool calls:** 1" in md
+    # 2000×$2/M + 500×$6/M = $0.0040 + $0.0030 = $0.0070 LLM
+    # plus 0.008 tool = $0.015 total
+    assert "**Cost:**" in md and "$0.0150" in md
+    assert "2,000 in / 500 out" in md  # token formatting
+
+    # Body: the prose report (markdown headers preserved)
+    assert "**Executive Summary**" in md
+    assert "**Sources**" in md
+
+    # Identifiers code block
+    assert "## Extracted Identifiers" in md
+    assert '"emails"' in md
+    assert "jane@example.com" in md
+
+    # Tool-call log
+    assert "## Tool Call Log" in md
+    assert "1. **tavily_search**" in md
+    assert "$0.0080" in md
+
+
+async def test_write_scan_markdown_dumps_old_envelope_report_as_json(tmp_path: Path):
+    """If the report dict has no 'text' key (old envelope shape), the body
+    section falls back to a JSON code block of the report dict."""
+    state = ScanState(scan_id="md2", subject="Jane", config=ScanConfig())
+    state.record_final_report({"summary": "hi", "accounts": []})
+    path = await write_scan_markdown(tmp_path, state, status="done")
+    md = path.read_text(encoding="utf-8")
+    assert '"summary": "hi"' in md
+    assert "```json" in md
+
+
+async def test_write_scan_markdown_handles_no_report_no_calls(tmp_path: Path):
+    """Defensive: bare ScanState with neither a report nor tool calls."""
+    state = ScanState(scan_id="md3", subject="Jane", config=ScanConfig())
+    path = await write_scan_markdown(tmp_path, state, status="failed")
+    md = path.read_text(encoding="utf-8")
+    assert "# Scan `md3`" in md
+    assert "**Status:** failed" in md
+    assert "_(no report was produced)_" in md
+    assert "_(no tool calls were made)_" in md

@@ -163,6 +163,8 @@ async def main(argv: list[str] | None = None) -> int:
         scans_dir=args.scans_dir,
     )
     print(result.path)
+    if result.markdown_path is not None:
+        print(result.markdown_path)
     return 0
 
 
