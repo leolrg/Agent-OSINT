@@ -102,10 +102,19 @@ class LeadQueueV2Runner:
         # Stop reason check before we spend on synth+verify
         should_stop, stop_reason = state.should_stop()
 
-        # Phase 3: synthesize
+        # Phase 3: synthesize. Always commit the parsed report to ScanState so
+        # the dispatcher's downstream ScanResult / write_scan_json reads
+        # state.report and state.extracted_identifiers populated. Without this
+        # the persisted scan JSON ends up with an empty report even though
+        # synthesis ran successfully — the bug that produced
+        # "(no report was produced)" markdown despite 11 findings on smoke.
         parsed = await synthesize(
             subject=subject, findings=state.findings,
             llm=llm, cost_cb=cost_cb,
+        )
+        state.record_final_report(
+            parsed.get("report") or {},
+            identifiers=parsed.get("extracted_identifiers") or {},
         )
 
         # Phase 4: verifier loop (skipped if cap-cut already)
@@ -130,6 +139,10 @@ class LeadQueueV2Runner:
                 parsed = await synthesize(
                     subject=subject, findings=state.findings,
                     llm=llm, cost_cb=cost_cb,
+                )
+                state.record_final_report(
+                    parsed.get("report") or {},
+                    identifiers=parsed.get("extracted_identifiers") or {},
                 )
                 state.verifier_iterations += 1
                 # Re-check stop conditions; verifier loop respects budget too.

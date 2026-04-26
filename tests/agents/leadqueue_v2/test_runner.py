@@ -153,3 +153,11 @@ async def test_runner_persists_findings_and_leads_log_through_scan_json(tmp_path
     assert "findings" in data and len(data["findings"]) == 1
     assert "leads_log" in data and len(data["leads_log"]) == 1
     assert data["findings"][0]["claim"] == "subject went to NYU"
+    # Regression: v2 runner must call state.record_final_report after each
+    # synthesize() — without it, the persisted JSON has empty `report` /
+    # `extracted_identifiers` even when the synthesizer produced text. (Bug
+    # caught by final code review on the smoke run; v2 reports were rendering
+    # as "(no report was produced)" despite having findings.)
+    assert data["report"]["text"], "synthesizer's prose must reach the persisted JSON"
+    assert "Executive Summary" in data["report"]["text"]
+    assert data["extracted_identifiers"] == {"schools": ["NYU"]}
