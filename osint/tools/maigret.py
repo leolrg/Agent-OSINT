@@ -102,6 +102,62 @@ def _status_str(info: dict) -> str | None:
     return str(result) if result is not None else None
 
 
+def _make_raw_jsonsafe(raw: dict | None) -> dict:
+    """Strip / normalize maigret's per-site response into a JSON-clean dict.
+
+    The raw response from `maigret.search` is `{site_name: info_dict}` where
+    info_dict can carry:
+      - a ``MaigretSite`` object under the ``"site"`` key (the full site
+        config: regex patterns, headers, etc. — huge and useless for our
+        audit log).
+      - a ``MaigretCheckResult`` object under the ``"status"`` key (an
+        enum + message + context).
+      - other plain primitives (``url_user``, ``http_status``, ``rank``).
+
+    Pydantic's model_dump(mode="json") on a ToolCallRecord whose raw field
+    holds a MaigretSite will raise PydanticSerializationError, so we
+    normalize here before handing it off. We DROP the ``site`` key
+    entirely (we don't need it) and reduce ``status`` to a small dict.
+    Everything else passes through if JSON-clean, otherwise becomes a
+    truncated repr — preserves diagnostic value without breaking writes.
+    """
+    safe: dict[str, dict] = {}
+    for site_name, info in (raw or {}).items():
+        if not isinstance(info, dict):
+            safe[str(site_name)] = {"_repr": repr(info)[:200]}
+            continue
+        clean: dict = {}
+        for k, v in info.items():
+            if k == "site":
+                # MaigretSite — full site config; drop entirely.
+                continue
+            if k == "status" and v is not None and not isinstance(v, (str, dict)):
+                # MaigretCheckResult — flatten to a small dict.
+                inner = getattr(v, "status", None)
+                clean[k] = {
+                    "status": (inner.value if isinstance(inner, MaigretCheckStatus)
+                               else str(inner) if inner is not None else None),
+                    "message": str(getattr(v, "message", "") or "") or None,
+                    "context": str(getattr(v, "context", "") or "") or None,
+                }
+                continue
+            if isinstance(v, (str, int, float, bool, type(None))):
+                clean[k] = v
+            elif isinstance(v, (list, tuple)):
+                clean[k] = [
+                    x if isinstance(x, (str, int, float, bool, type(None))) else repr(x)[:200]
+                    for x in v
+                ]
+            elif isinstance(v, dict):
+                clean[k] = {str(kk): (vv if isinstance(vv, (str, int, float, bool, type(None)))
+                                      else repr(vv)[:200])
+                            for kk, vv in v.items()}
+            else:
+                clean[k] = repr(v)[:200]
+        safe[str(site_name)] = clean
+    return safe
+
+
 class MaigretTool(BaseTool):
     name: str = "maigret"
     description: str = (
@@ -152,6 +208,10 @@ class MaigretTool(BaseTool):
                 # "site doesn't have this user".
                 blocked.append(entry)
 
-        artifact = {"found_accounts": found, "blocked": blocked, "raw": raw}
+        artifact = {
+            "found_accounts": found,
+            "blocked": blocked,
+            "raw": _make_raw_jsonsafe(raw),
+        }
         content = json.dumps({"found_accounts": found}, default=str)
         return content, artifact
