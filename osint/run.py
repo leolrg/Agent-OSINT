@@ -119,6 +119,14 @@ async def scan(
             duration_sec=state.wall_clock_elapsed,
             path=path,
             markdown_path=markdown_path,
+            findings=[
+                f.model_dump(mode="json") if hasattr(f, "model_dump") else f
+                for f in state.findings
+            ],
+            leads_log=[
+                l.model_dump(mode="json") if hasattr(l, "model_dump") else l
+                for l in state.leads_log
+            ],
         )
     except Exception:
         # Best-effort: persist whatever state we have so the failure is

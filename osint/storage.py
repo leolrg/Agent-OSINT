@@ -32,6 +32,17 @@ async def write_scan_json(
         "messages": state.messages,
         "pass_reports": state.pass_reports,
         "report": state.report,
+        # v2 lead-queue artifacts. Empty for v1. Each Lead/Finding is a
+        # Pydantic model in v2; defensively fall through for any already-
+        # dict entries (e.g. tests that hand-construct ScanState).
+        "findings": [
+            f.model_dump(mode="json") if hasattr(f, "model_dump") else f
+            for f in state.findings
+        ],
+        "leads_log": [
+            l.model_dump(mode="json") if hasattr(l, "model_dump") else l
+            for l in state.leads_log
+        ],
         "tool_cost_usd": state.tool_cost_usd,
         "llm_cost_usd": state.llm_cost_usd,
         "llm_input_tokens": state.llm_input_tokens,
@@ -159,6 +170,43 @@ async def write_scan_markdown(
                 parts.append("```")
             else:
                 parts.append("_(no report produced for this pass)_")
+
+    # ── v2 lead-queue artifacts ────────────────────────────────────────────
+    # Only rendered when the v2 runner populated them; v1 leaves both lists
+    # empty so this block is skipped entirely (no empty headings).
+    # Lead/Finding objects on state are Pydantic models — we read fields via
+    # `model_dump()` so this code is robust to either dict or model entries.
+    def _as_dict(x):
+        return x.model_dump(mode="json") if hasattr(x, "model_dump") else dict(x)
+
+    if state.leads_log:
+        parts.append("")
+        parts.append("---")
+        parts.append("")
+        parts.append("## Leads processed")
+        parts.append("")
+        for i, lead_obj in enumerate(state.leads_log, 1):
+            lead = _as_dict(lead_obj)
+            parts.append(
+                f"{i}. **[{lead.get('kind')}]** "
+                f"(priority={lead.get('priority')}, depth={lead.get('depth')}) "
+                f"{lead.get('description')}"
+            )
+        parts.append("")
+
+    if state.findings:
+        parts.append("---")
+        parts.append("")
+        parts.append("## Findings (raw)")
+        parts.append("")
+        for finding_obj in state.findings:
+            f = _as_dict(finding_obj)
+            ev = f.get("evidence") or [{}]
+            tc_id = ev[0].get("tool_call_id", "?") if isinstance(ev[0], dict) else "?"
+            parts.append(
+                f"- **({f.get('confidence')})** {f.get('claim')}  ← {tc_id}"
+            )
+        parts.append("")
 
     # ── Tool-call log ──────────────────────────────────────────────────────
     parts.append("")

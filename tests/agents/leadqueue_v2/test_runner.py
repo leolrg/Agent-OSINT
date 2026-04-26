@@ -131,3 +131,25 @@ async def test_runner_verifier_loop_caps_at_max_iterations():
     runner = LeadQueueV2Runner()
     await runner.run(subject="Jane", state=state, llm=fake, tools=[], cost_cb=MagicMock())
     assert state.verifier_iterations == 3, "must cap at max_verifier_iterations"
+
+
+async def test_runner_persists_findings_and_leads_log_through_scan_json(tmp_path):
+    """The dispatcher writes scan JSON; v2 fields must round-trip."""
+    import json as json_module
+    from osint.run import scan
+    fake = BindableFake(responses=[
+        _ai(PROCESSOR_OUTPUT),
+        AIMessage(content=SYNTH_OUTPUT_PROSE_PLUS_JSON, tool_calls=[]),
+        _ai(VERIFIER_SATISFIED),
+    ])
+    cfg = ScanConfig(
+        agent_version="leadqueue_v2",
+        enabled_tools=set(),  # no tool-build env required
+    )
+    # need APIFY_TOKEN unset-safe path: enabled_tools is empty so tool factory
+    # doesn't validate APIFY_TOKEN.
+    result = await scan(subject="Jane", config=cfg, llm=fake, scans_dir=tmp_path)
+    data = json_module.loads(result.path.read_text())
+    assert "findings" in data and len(data["findings"]) == 1
+    assert "leads_log" in data and len(data["leads_log"]) == 1
+    assert data["findings"][0]["claim"] == "subject went to NYU"

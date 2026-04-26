@@ -78,3 +78,8 @@ class ScanResult(BaseModel):
     duration_sec: float = 0.0
     path: Path                              # the .json artifact (source of truth)
     markdown_path: Path | None = None       # the .md sibling (human-readable render)
+    # v2 lead-queue artifacts. Empty list for v1 (back-compat). Stored as
+    # plain dicts (already serialized via Pydantic's `model_dump(mode="json")`)
+    # so this module doesn't need to import the v2 Lead/Finding models.
+    findings: list[dict] = Field(default_factory=list)   # serialized list[Finding]
+    leads_log: list[dict] = Field(default_factory=list)  # serialized list[Lead]
