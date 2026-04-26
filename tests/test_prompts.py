@@ -66,6 +66,23 @@ def test_system_prompt_uses_prose_plus_tail_json_format():
     assert '"report":' not in p
 
 
+def test_tavily_extract_routing_rule_warns_about_blocked_origins():
+    """Regression: the prompt must tell the agent NOT to pass LinkedIn /
+    Instagram / X URLs to tavily_extract — Tavily returns 'Access to this
+    origin is disabled' for those, which used to crash the scan loop."""
+    p = build_system_prompt(
+        subject="Jane",
+        tool_names=["tavily_extract", "apify_linkedin", "apify_instagram", "apify_twitter"],
+    )
+    lower = p.lower()
+    # Each blocked domain must be mentioned in the routing rule.
+    for domain in ("linkedin.com", "instagram.com"):
+        assert domain in lower, f"prompt should warn about {domain} for tavily_extract"
+    # And it should explicitly route to the apify_* alternatives.
+    assert "apify_linkedin" in p
+    assert "apify_instagram" in p
+
+
 def test_system_prompt_requires_source_citations():
     """Reports must cite the tool call that produced each major claim,
     so a reader can audit which evidence supports which finding."""

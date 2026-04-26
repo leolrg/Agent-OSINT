@@ -91,11 +91,26 @@ class CappedTool(BaseTool):
             else:
                 content = result
                 artifact = result
+        except ScanStopped:
+            # Cap-cut from a tool we wrapped — propagate so scan() can run
+            # synthesis. (CappedTool itself raises this above; this branch
+            # is for the unlikely case where an inner tool nests a cap.)
+            raise
         except Exception as e:
+            # Convert inner-tool errors into a tool-message string the LLM
+            # can react to, INSTEAD of re-raising. LangGraph's default
+            # behaviour is to re-raise tool exceptions, which would crash
+            # the entire scan on a single bad URL / blocked origin / 429.
+            # By returning an error-content here, the agent sees the failure
+            # in its conversation history and can adjust strategy
+            # (try a different URL, switch tools, give up that thread).
             error = f"{type(e).__name__}: {e}"
             completed = datetime.now(timezone.utc)
             self._record(started, completed, tool_call_id, kwargs, None, None, error)
-            raise
+            error_content = f"Tool error from {self._wrapped.name}: {error}"
+            if self.response_format == "content_and_artifact":
+                return error_content, {"error": error}
+            return error_content
 
         completed = datetime.now(timezone.utc)
         output_dict = artifact if isinstance(artifact, dict) else {"text": str(content)}

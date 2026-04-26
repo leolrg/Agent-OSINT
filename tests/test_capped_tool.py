@@ -82,7 +82,16 @@ async def test_capped_tool_raises_when_stopped():
     assert exc.value.reason == "budget"
 
 
-async def test_capped_tool_logs_inner_exception_and_reraises():
+async def test_capped_tool_returns_error_content_on_inner_exception():
+    """Inner-tool exceptions are converted to error-content the LLM can see,
+    NOT re-raised. LangGraph's default behaviour on a re-raise is to crash
+    the entire graph, which would kill a multi-tool scan on the first bad
+    URL / blocked origin / 429. The error is still recorded in the audit
+    log via tool_calls[].error so the failure is visible after the scan.
+
+    String-output (response_format='content') variant.
+    """
+
     class _Boom(BaseTool):
         name: str = "boom"
         description: str = "raises"
@@ -96,11 +105,47 @@ async def test_capped_tool_logs_inner_exception_and_reraises():
 
     state = ScanState(scan_id="s", subject="S", config=ScanConfig())
     capped = CappedTool(wrapped=_Boom(), state=state, est_cost_usd=0.0)
-    with pytest.raises(RuntimeError):
-        await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    out = await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    # No raise — the loop survives.
+    assert isinstance(out, str)
+    assert "Tool error from boom" in out
+    assert "RuntimeError" in out
+    assert "nope" in out
+    # Audit record still captures the error.
     rec = state.tool_calls[0]
     assert "nope" in rec.error
     assert rec.output is None
+
+
+async def test_capped_tool_returns_error_tuple_on_inner_exception_artifact_format():
+    """Same graceful-error behaviour for content_and_artifact tools: returns
+    (content_str, {"error": ...}) so LangGraph still sees a successful tool
+    return rather than an exception that would crash the loop."""
+
+    class _BoomArtifact(BaseTool):
+        name: str = "boom_artifact"
+        description: str = "raises"
+        args_schema: type = _EchoInput
+        response_format: str = "content_and_artifact"
+
+        def _run(self, q: str):
+            raise NotImplementedError
+
+        async def _arun(self, q: str, **kwargs):
+            raise ValueError("blocked origin")
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_BoomArtifact(), state=state, est_cost_usd=0.0)
+    out = await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    # LangChain unwraps content_and_artifact tuples at the ainvoke boundary —
+    # callers see just the content; the artifact rides on the constructed
+    # ToolMessage. We assert on the content string here.
+    assert isinstance(out, str)
+    assert "Tool error from boom_artifact" in out
+    assert "ValueError" in out
+    assert "blocked origin" in out
+    # The audit record still has the error preserved.
+    assert "blocked origin" in state.tool_calls[0].error
 
 
 async def test_capped_tool_handles_parallel_invocations_independently():

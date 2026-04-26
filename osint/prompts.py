@@ -130,7 +130,7 @@ the system prompt specified:
 # Per-tool one-line routing rules, only included for tools actually enabled.
 _ROUTING_RULES = {
     "tavily_search": "tavily_search — general web (news, blogs, personal sites, public profiles outside of X). The default for any open-web question. Returns URLs + short snippets — the snippets are NOT sufficient evidence; Follow up with tavily_extract on the most-relevant URLs when the snippet implies it has more information.",
-    "tavily_extract": "tavily_extract — read the full content of one or more URLs. Use this after tavily_search on URLs that looks promosing to get more information. Based on snippet you shuold see what is important.",
+    "tavily_extract": "tavily_extract — read the full content of one or more URLs. Use this after tavily_search on URLs that look promising to get more information. Based on the snippet you should see what is important. IMPORTANT: Tavily CANNOT access these origins (it'll return 'Access to this origin is disabled' or empty results) — DO NOT pass URLs from these domains: linkedin.com, instagram.com, facebook.com, tiktok.com, x.com, twitter.com, threads.net. For LinkedIn URLs, route to apify_linkedin instead. For Instagram, apify_instagram. For X/Twitter, apify_twitter. For other social platforms not in our toolset, just note the URL in the report and move on.",
     "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
     "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
     "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",
