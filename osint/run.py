@@ -24,6 +24,7 @@
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -176,18 +177,26 @@ async def _run_one_pass(
         system_text = build_system_prompt(subject, sorted(config.enabled_tools))
         seed_message = HumanMessage(content="Begin the scan.")
     else:
+        # Summarize every tool call made in any prior pass into a one-line-
+        # per-call list — same formatter we use for cap-cut synthesis.
+        # The agent uses it to avoid retreading the same searches.
+        prev_tool_calls = format_tool_calls_for_synthesis(state.tool_calls)
         system_text = build_deepen_prompt(
             subject=subject,
             tool_names=sorted(config.enabled_tools),
             previous_report_text=previous_report_text or "",
+            previous_tool_calls_summary=prev_tool_calls,
             pass_num=pass_num,
             total_passes=total_passes,
         )
         seed_message = HumanMessage(
             content=(
                 f"Begin pass {pass_num} of {total_passes}. Critique the draft "
-                f"above, identify gaps and unfollowed leads, then run NEW "
-                f"tool calls to fill them. Produce v{pass_num} of the report."
+                f"above, identify gaps and unfollowed leads, and consult the "
+                f"prior-pass tool-call list to know what's been tried — then "
+                f"run NEW tool calls (different queries, different URLs, "
+                f"different angles) to fill the gaps. Produce v{pass_num} "
+                f"of the report."
             )
         )
 
@@ -311,6 +320,19 @@ async def scan(
                 identifiers=merged_identifiers,
             )
             previous_report_text = (parsed.get("report") or {}).get("text") or ""
+
+            # Per-pass audit trail: record what THIS pass produced (its own
+            # report, its own emitted identifiers, whether it cap-cut,
+            # when it finished). Distinct from state.report (latest wins)
+            # and state.extracted_identifiers (union-merged) — pass_reports
+            # is the historical chain showing how the report evolved.
+            state.pass_reports.append({
+                "pass_num": pass_num,
+                "report": parsed.get("report") or {},
+                "extracted_identifiers": parsed.get("extracted_identifiers") or {},
+                "stop_reason": pass_stop_reason.value if pass_stop_reason else None,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
 
             logger.info(
                 "scan.pass.done",

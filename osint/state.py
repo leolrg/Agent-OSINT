@@ -31,6 +31,13 @@ class ScanState:
     # tool_calls), and ToolMessage. Includes the synthesis exchange too
     # when a cap-cut triggered the synthesis fallback.
     messages: list[dict[str, Any]] = field(default_factory=list)
+    # Per-pass report history for multi-pass scans. Each entry captures
+    # what THAT pass produced (its prose report, its own extracted
+    # identifiers JSON tail, whether it cap-cut, when it finished).
+    # state.report holds the LATEST pass's prose (latest wins for the
+    # final answer); state.extracted_identifiers is the union-merge.
+    # pass_reports is the audit trail of how the report evolved.
+    pass_reports: list[dict[str, Any]] = field(default_factory=list)
     _has_report: bool = False
 
     @property

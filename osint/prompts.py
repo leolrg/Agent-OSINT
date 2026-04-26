@@ -217,6 +217,14 @@ end of THIS pass):
 {previous_report_text}
 ---
 
+TOOL CALLS ALREADY MADE IN PRIOR PASSES (use this to avoid retreading
+the same searches — pivot to NEW search vectors, NEW query variations,
+NEW URLs, NEW usernames. If you see a query that returned poor results,
+try a different angle on the same target instead of re-running it):
+---
+{previous_tool_calls_summary}
+---
+
 SUBJECT (unchanged across passes):
 ---
 {subject}
@@ -241,17 +249,20 @@ def build_deepen_prompt(
     subject: str,
     tool_names: list[str],
     previous_report_text: str,
+    previous_tool_calls_summary: str,
     pass_num: int,
     total_passes: int,
 ) -> str:
     rules = [f"- {_ROUTING_RULES[n]}" for n in tool_names if n in _ROUTING_RULES]
     routing_guidance = "\n".join(rules) if rules else "- (no enabled tools have specific routing rules)"
     prev_text = previous_report_text or "(no draft text available — produce a fresh investigation)"
+    prev_calls = previous_tool_calls_summary or "(no prior tool calls)"
     return DEEPEN_TEMPLATE.format(
         subject=subject,
         tool_names=", ".join(tool_names),
         routing_guidance=routing_guidance,
         previous_report_text=prev_text,
+        previous_tool_calls_summary=prev_calls,
         pass_num=pass_num,
         total_passes=total_passes,
         prev_pass_num=pass_num - 1,

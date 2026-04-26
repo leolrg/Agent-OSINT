@@ -143,12 +143,14 @@ def test_parse_report_prose_plus_tail_identifiers_json():
 
 def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
     """The deepen prompt must include (a) the previous pass's report text
-    so the LLM can critique it, (b) explicit pass-N-of-N labelling, and
-    (c) the same routing guidance the system prompt uses."""
+    so the LLM can critique it, (b) explicit pass-N-of-N labelling, (c)
+    the same routing guidance the system prompt uses, and (d) the prior-
+    pass tool-call summary so the agent doesn't retread the same searches."""
     p = build_deepen_prompt(
         subject="Jane Doe, NYC",
         tool_names=["tavily_search", "tavily_extract", "apify_linkedin"],
         previous_report_text="**Executive Summary**\nJane is a SWE...",
+        previous_tool_calls_summary='1. tavily_search({"query":"Jane Doe NYC"}) → {"results":[]}',
         pass_num=2,
         total_passes=3,
     )
@@ -157,6 +159,9 @@ def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
     assert "PASS 1" in p or "pass 1" in p.lower()
     # Previous report is embedded verbatim
     assert "Jane is a SWE" in p
+    # Prior tool-call summary is embedded verbatim
+    assert '1. tavily_search({"query":"Jane Doe NYC"})' in p
+    assert "do not repeat" in p.lower() or "avoid retreading" in p.lower() or "find new" in p.lower()
     # Subject is carried through
     assert "Jane Doe, NYC" in p
     # Tool list + routing guidance carried over
@@ -170,17 +175,19 @@ def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
     assert "extracted_identifiers" in p
 
 
-def test_build_deepen_prompt_handles_missing_previous_report():
-    """If the previous report's text was empty, the prompt should still
-    render without raising and include a placeholder."""
+def test_build_deepen_prompt_handles_missing_previous_report_and_calls():
+    """If the previous report's text or tool-call summary was empty, the
+    prompt should still render without raising and include placeholders."""
     p = build_deepen_prompt(
         subject="Jane",
         tool_names=["tavily_search"],
         previous_report_text="",
+        previous_tool_calls_summary="",
         pass_num=2,
         total_passes=2,
     )
     assert "no draft text available" in p
+    assert "no prior tool calls" in p
 
 
 def test_parse_report_pure_prose_no_json():

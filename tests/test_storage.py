@@ -155,6 +155,84 @@ async def test_write_scan_json_includes_messages(tmp_path: Path):
     assert data["messages"][3]["tool_call_id"] == "c1"
 
 
+async def test_write_scan_json_includes_pass_reports(tmp_path: Path):
+    """pass_reports lands in the JSON file as a list of per-pass entries
+    so multi-pass scans preserve the report-evolution audit trail."""
+    state = ScanState(scan_id="pr1", subject="Jane", config=ScanConfig())
+    state.pass_reports = [
+        {
+            "pass_num": 1,
+            "report": {"text": "Pass 1 prose..."},
+            "extracted_identifiers": {"emails": ["jane@old.com"]},
+            "stop_reason": None,
+            "completed_at": "2026-04-26T10:00:00+00:00",
+        },
+        {
+            "pass_num": 2,
+            "report": {"text": "Pass 2 prose with more details..."},
+            "extracted_identifiers": {"emails": ["jane@new.com"]},
+            "stop_reason": None,
+            "completed_at": "2026-04-26T10:05:00+00:00",
+        },
+    ]
+    state.record_final_report({"text": "Pass 2 prose with more details..."})
+    path = await write_scan_json(tmp_path, state, status="done")
+    data = json.loads(path.read_text())
+    assert "pass_reports" in data
+    assert len(data["pass_reports"]) == 2
+    assert data["pass_reports"][0]["pass_num"] == 1
+    assert "Pass 1 prose" in data["pass_reports"][0]["report"]["text"]
+    assert data["pass_reports"][1]["pass_num"] == 2
+
+
+async def test_write_scan_markdown_renders_pass_evolution_for_multipass(tmp_path: Path):
+    """For 2+ pass scans, the .md gets a 'Pass Evolution' section with the
+    prior-pass drafts (passes 1..N-1). The final pass IS the body above."""
+    state = ScanState(scan_id="pr2", subject="Jane", config=ScanConfig())
+    state.pass_reports = [
+        {"pass_num": 1, "report": {"text": "Pass 1 draft body"},
+         "extracted_identifiers": {}, "stop_reason": None, "completed_at": "2026-04-26T10:00:00+00:00"},
+        {"pass_num": 2, "report": {"text": "Pass 2 deeper body"},
+         "extracted_identifiers": {}, "stop_reason": None, "completed_at": "2026-04-26T10:05:00+00:00"},
+        {"pass_num": 3, "report": {"text": "Pass 3 deepest body — FINAL"},
+         "extracted_identifiers": {}, "stop_reason": None, "completed_at": "2026-04-26T10:10:00+00:00"},
+    ]
+    # state.report is the LATEST pass — that's what shows in the body.
+    state.record_final_report({"text": "Pass 3 deepest body — FINAL"})
+
+    path = await write_scan_markdown(tmp_path, state, status="done")
+    md = path.read_text(encoding="utf-8")
+
+    # Final pass appears in the main body (above any "Pass Evolution" header).
+    assert md.index("Pass 3 deepest body — FINAL") < md.index("## Pass Evolution")
+    # Pass-evolution section exists and labels itself.
+    assert "## Pass Evolution" in md
+    assert "3 passes" in md
+    # Prior drafts (passes 1 and 2) are rendered under their own headers.
+    assert "### Pass 1 draft" in md
+    assert "Pass 1 draft body" in md
+    assert "### Pass 2 draft" in md
+    assert "Pass 2 deeper body" in md
+    # The final pass is NOT duplicated in pass evolution (it's already the body).
+    # Specifically, "### Pass 3 draft" should not appear.
+    assert "### Pass 3 draft" not in md
+
+
+async def test_write_scan_markdown_omits_pass_evolution_for_single_pass(tmp_path: Path):
+    """Single-pass scans don't get a Pass Evolution section — there's no
+    prior draft to show, and the section would just duplicate the body."""
+    state = ScanState(scan_id="pr3", subject="Jane", config=ScanConfig())
+    state.pass_reports = [
+        {"pass_num": 1, "report": {"text": "Single pass body"},
+         "extracted_identifiers": {}, "stop_reason": None,
+         "completed_at": "2026-04-26T10:00:00+00:00"},
+    ]
+    state.record_final_report({"text": "Single pass body"})
+    path = await write_scan_markdown(tmp_path, state, status="done")
+    md = path.read_text(encoding="utf-8")
+    assert "## Pass Evolution" not in md
+
+
 async def test_write_scan_markdown_renders_message_log_summary(tmp_path: Path):
     """The .md gets a one-line summary of message-type counts (full
     transcript stays in the JSON to avoid bloating the markdown)."""

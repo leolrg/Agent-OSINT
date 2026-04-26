@@ -30,6 +30,7 @@ async def write_scan_json(
         "config": state.config.model_dump(mode="json"),
         "tool_calls": [tc.model_dump(mode="json") for tc in state.tool_calls],
         "messages": state.messages,
+        "pass_reports": state.pass_reports,
         "report": state.report,
         "tool_cost_usd": state.tool_cost_usd,
         "llm_cost_usd": state.llm_cost_usd,
@@ -123,6 +124,41 @@ async def write_scan_markdown(
             "reasoning + tool_calls, each ToolMessage payload) are in the "
             "JSON file's `messages` field."
         )
+
+    # ── Pass evolution (only for multi-pass scans) ─────────────────────────
+    # Show prior-pass drafts so a reader can see how the report evolved.
+    # The FINAL pass's report is already the body above; we render passes
+    # 1..N-1 here as collapsed-style sections. For a single-pass scan this
+    # block is omitted entirely.
+    if len(state.pass_reports) > 1:
+        parts.append("")
+        parts.append("---")
+        parts.append("")
+        parts.append("## Pass Evolution")
+        parts.append("")
+        parts.append(
+            f"This scan ran **{len(state.pass_reports)} passes**. The main "
+            "report above is the final pass; below are the prior drafts so "
+            "you can see how the investigation deepened."
+        )
+        # Skip the LAST entry — that one IS the body above.
+        for entry in state.pass_reports[:-1]:
+            pn = entry.get("pass_num", "?")
+            stop = entry.get("stop_reason")
+            cap_note = f" (cap-cut: {stop})" if stop else ""
+            parts.append("")
+            parts.append(f"### Pass {pn} draft{cap_note}")
+            parts.append("")
+            r = entry.get("report") or {}
+            text = r.get("text") if isinstance(r, dict) else None
+            if text:
+                parts.append(str(text).rstrip())
+            elif r:
+                parts.append("```json")
+                parts.append(json.dumps(r, indent=2, default=str, ensure_ascii=False))
+                parts.append("```")
+            else:
+                parts.append("_(no report produced for this pass)_")
 
     # ── Tool-call log ──────────────────────────────────────────────────────
     parts.append("")

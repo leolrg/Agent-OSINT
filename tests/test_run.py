@@ -96,6 +96,19 @@ async def test_scan_runs_multiple_passes_and_merges_identifiers(tmp_path):
     ai_msgs = [m for m in data["messages"] if m["type"] == "ai"]
     assert any("Pass 1" in (m.get("content") or "") for m in ai_msgs)
     assert any("Pass 2" in (m.get("content") or "") for m in ai_msgs)
+    # Per-pass audit trail (pass_reports) records BOTH drafts independently,
+    # so the historical chain is preserved even though state.report holds
+    # only the latest.
+    assert "pass_reports" in data
+    assert len(data["pass_reports"]) == 2
+    assert data["pass_reports"][0]["pass_num"] == 1
+    assert "Pass 1" in data["pass_reports"][0]["report"]["text"]
+    assert data["pass_reports"][1]["pass_num"] == 2
+    assert "Pass 2" in data["pass_reports"][1]["report"]["text"]
+    # Each pass entry retains that pass's OWN identifier list (not merged) —
+    # state.extracted_identifiers above is the union; pass_reports are raw.
+    assert data["pass_reports"][0]["extracted_identifiers"]["emails"] == ["jane@old.com"]
+    assert data["pass_reports"][1]["extracted_identifiers"]["emails"] == ["jane@new.com"]
 
 
 async def test_scan_passes_default_to_one(tmp_path):
