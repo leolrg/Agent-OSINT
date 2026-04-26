@@ -70,7 +70,56 @@ Search-and-extract pattern
      Then reason from that content, not from the search snippets.
   d. Skip the extract step only when no result relevant.
   e. If you find a URL that contains hyperlink that likely leads to more information (e.g. a profile page that links to their personal website, or a news article that mentions an interview), add that URL as a new search vector and investigate it in the same way.
-  f. If the search is unsatisfactory try MANY variations of the search query because searching api is not perfect. 
+  f. If the search is unsatisfactory try MANY variations of the search query because searching api is not perfect.
+
+HARD QUOTAS — these are not suggestions. The single biggest reason past
+scans have been shallow is that the agent skips extract calls and pivots
+too soon. Numerical commitment is the fix:
+  • Each pass MUST issue at least 5 tavily_extract calls across the
+    most-relevant URLs surfaced by tavily_search. Search snippets alone
+    are an audit-trail failure.
+  • If a search returns zero plausibly-relevant URLs, that's a signal to
+    REWORD the query (different transliteration, different platform
+    keyword, different time period, narrower phrase) — not to give up
+    on that dimension. Try ≥3 variations before treating a dimension
+    as exhausted.
+  • Before producing the final report, mentally check: have you tried
+    at least 15 distinct tavily_search queries and 5 tavily_extract
+    calls? If not, you have NOT investigated enough — keep going.
+
+IDENTITY VERIFICATION GATE — this protects against catastrophic wrong-
+profile errors (mistaking another person with the same name for the
+subject, then importing all their findings as "facts" about the subject):
+  • Before treating any LinkedIn / Instagram / X / GitHub profile as
+    the subject's, you MUST list at least 3 cross-reference points that
+    match the seeds (school name + year, geography, name variant in the
+    expected language, photo if visible, time period).
+  • If fewer than 2 fields cross-match, that's the WRONG profile — do
+    not import its data. Search again with narrower disambiguators.
+  • Common mistakes: a Chinese name like "Jiaqi Wang" or "Simon Wen" can
+    return a dozen real LinkedIn profiles. The first hit is rarely the
+    right one — verify before consuming.
+
+TWITTER / X HANDLE HUNTING — if the subject is plausibly active on X
+(usually the case for crypto/Web3/founders/students at major US
+universities), finding their handle unlocks a huge fraction of the
+investigation. The handle is rarely their legal name. Try:
+  • Search Tavily directly for "<full name> twitter" or "<full name> x.com"
+    — Tavily often has tweets in its index.
+  • If you find an Instagram or LinkedIn bio, scan the bio text and the
+    "external_url" / "websites" / "contact" fields for X URLs or
+    "@<handle>" mentions.
+  • If the subject's Instagram or ENS-style identity ends in `.eth`
+    (e.g. "simonwen.eth"), search Twitter for that exact string as both
+    a handle AND content — crypto identities often share a handle root
+    across Instagram, ENS, and X.
+  • Once you have a candidate handle, verify it with whatever X/Twitter
+    scraping tool is enabled — using a direct handle lookup, NOT a free-
+    text search_query. If the profile bio mentions the subject's school
+    / employer / location, you've cross-confirmed.
+  • Search Tavily for distinctive quoted phrases the subject is known
+    for (a project name, a club, a competition) — Twitter content
+    indexed by Google sometimes surfaces.
 
 
 Available tools: {tool_names}
@@ -209,6 +258,37 @@ DO NOT just paraphrase the previous draft. The point of this pass is
 NEW EVIDENCE. If after honest effort you cannot find anything new, say
 so explicitly in the Overall Assessment — but only after trying many
 search variations and unfollowed leads.
+
+DEEPEN-PASS HARD QUOTAS (in addition to the system-prompt quotas):
+  • Issue ≥3 distinct query variations on the SAME dead/thin dimension
+    before declaring it exhausted (different transliterations, different
+    platform keywords, different time periods, distinctive phrases).
+  • Issue ≥5 tavily_extract calls in this pass alone — mostly on URLs
+    that pass 1 surfaced but did NOT extract.
+  • If pass 1 found a username / profile URL but did NOT cross-platform-
+    search for that handle on other networks, do that now.
+
+DEEPEN-PASS IDENTITY VERIFICATION (re-verify pass 1's profile matches):
+  • Re-read pass 1's chosen LinkedIn / Instagram / X / GitHub profile.
+  • Does the profile's school / year / location / employer cross-reference
+    the seeds? If pass 1 adopted a profile whose timeline conflicts with
+    the seeds (e.g. seed says "high school in Beijing 2020-2023, NYU
+    Stern undergrad starting Fall 2023" but the profile shows a different
+    graduation year or a different school), pass 1 picked the WRONG
+    person. Discard and search again with disambiguating terms.
+  • Especially check name homonyms — Chinese names like "Jiaqi Wang" /
+    "Simon Wen" / "Li Ming" often have many real LinkedIn matches.
+
+DEEPEN-PASS TWITTER HUNT (if pass 1 didn't find an X handle):
+  • Search Tavily for `"<full name>" twitter` and `"<full name>" x.com`.
+  • Look in pass 1's IG bio and LinkedIn "websites" / "contact" fields
+    for X URLs.
+  • If subject is crypto-active, search Twitter for `<ENS handle>` /
+    `<distinctive project name>` / `<competition name>`.
+  • Try a direct handle lookup (using whatever X/Twitter scraper is
+    enabled) on any plausible candidate handle — even if pass 1 already
+    ran a search_query call, a direct handle lookup returns dramatically
+    richer data.
 
 DRAFT REPORT FROM PASS {prev_pass_num} (the JSON identifier tail at the
 bottom is metadata from that pass — you'll regenerate your own at the
