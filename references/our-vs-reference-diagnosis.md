@@ -162,3 +162,73 @@ LinkedIn / IG / X profiles often expose "websites" / "contact info" / "external_
 7. **[Bigger] Add Etherscan/ENS lookup** for `.eth` handles to surface on-chain activity, NFT holdings, etc. Out of scope for now.
 
 Items 1–3 are cheap one-commit prompt changes that should noticeably close gaps without any tool work. Items 4–5 are the real high-leverage code changes. Items 6–7 are v2 tool additions.
+
+---
+
+## After applying items 1–3 (prompt-only fixes) — measurement run
+
+Re-ran both subjects with the sharpened prompt (commit `d1de761`).
+
+### Simon v2 (`scans/1f650773c5ae48cb9ad1be4b917f911a`)
+**Big improvement.** Agent followed the new heuristics aggressively:
+- **Found `@semona0x` handle** — Tavily search snippet on turn 3 surfaced
+  Simon's Zhihu profile saying *"Simon Wen. 纽约｜05｜大一xhs/twitter：Semona0x"*.
+  Pre-fix the agent skipped past it; post-fix it pivoted hard.
+- **Found VOMEUS** ("on-chain smoker @vomeus") via subsequent Semona0x
+  searches that surfaced his X profile bio fragments through Tavily.
+- **Found Milady Cult / @MiladyCult affiliation** — same chain.
+- **Found Zhihu wh1t3zzuqjw** — cross-referenced to Semona0x.
+- **Found `@nyuniversity` connection** in the X bio.
+- **Tried direct `apify_twitter(handle="Semona0x")`** — actor returned
+  `{"demo": true}` (placeholder, not real data) but agent already had
+  enough evidence from Tavily snippets.
+- 3 tavily_extract calls (was 1).
+
+Net: matched roughly 70% of the reference's findings on Simon's
+crypto/Web3 narrative — was 0% before. The Apify Twitter returning
+demo data is a separate issue (probably actor/auth setup).
+
+### Allison v2 (`scans/9149d540ea0646c0b4a9b2f550134fc7`)
+**Mixed.** Agent followed the verification-gate pattern and tried TWO
+LinkedIn candidates instead of blindly trusting the first hit
+(`jiaqi-wang-a30a76290` AND `jiaqiwang98`) — but **neither** was the
+right Allison. Reference's `allison-wang-8970bb21a` was never surfaced
+by Tavily. Apify Instagram returned empty for `allison_wanggg` again.
+
+The agent did surface a "2022 Alpha Scholars Silver Medal for paper
+on Social Marketing & Sustainable Fashion Brands" attribution — but
+the reference doesn't list this; might be a third-Allison
+mis-attribution. Cannot verify without the right LinkedIn.
+
+The 7 reference-confirmed internships (Wells Fargo, ISG, Melrose
+Legacy Partners, Colton Alexander, MiraclePlus, Envolve Group, Fashion
+Way Corp Limited high-school CEO) all live on the right LinkedIn we
+never found. Sciences Po 2022 / Wharton Global Youth 2021 / Anti-Emo
+cofounder / NYU CFC membership / RocketReach data — all unreachable
+without either:
+  (a) Tavily surfacing `linkedin.com/in/allison-wang-8970bb21a`, OR
+  (b) An IG bio scrape that links to the right LinkedIn URL, OR
+  (c) An aggregator like RocketReach being in our toolset.
+
+Items 4–7 are needed for Allison-class subjects. Prompt fixes alone
+hit a ceiling when the discoverable surface for the right profile
+isn't in our index/toolset.
+
+### Concrete prompt-fix impact summary
+
+| Symptom | Pre-fix | Post-fix |
+|---|---|---|
+| Simon: Twitter handle (Semona0x) | not found | found via Tavily + cross-ref |
+| Simon: VOMEUS / Movement / crypto narrative | missed entirely | ~70% covered |
+| Simon: Zhihu profile (wh1t3zzuqjw) | missed | found |
+| Simon: tavily_extract call count | 1 | 3 |
+| Allison: LinkedIn verification | one match adopted blindly | tried 2, both wrong (right one un-indexed) |
+| Allison: tavily_extract call count | 2 | 2 (still under quota — agent strategically skipped) |
+| Allison: still wrong-person attributions | yes (UCI/Ogilvy/Google) | yes (3rd Allison's Alpha Scholars paper) |
+| Allison: 7 real internships found | 0 | 0 (right LinkedIn not in Tavily index) |
+
+The prompt fix unlocks discoverable depth (Simon). It does not unlock
+non-discoverable depth (Allison, where the right LinkedIn isn't in
+the Tavily-indexed surface). The next high-leverage move is fixing
+Apify Instagram to actually return bio data — that's the cross-
+platform bridge we keep losing.
