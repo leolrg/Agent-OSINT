@@ -81,13 +81,13 @@ used:
   2. Then ONE fenced JSON block at the very end:
 
 ```json
-{{
-  "extracted_identifiers": {{
+{
+  "extracted_identifiers": {
     "emails": [...], "usernames": [...], "urls": [...],
     "name_variations": [...], "schools": [...], "employers": [...],
     "phones": [...], "addresses": [...]
-  }}
-}}
+  }
+}
 ```
 
 Rules:
