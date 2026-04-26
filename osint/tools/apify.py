@@ -149,7 +149,20 @@ class ApifyInstagramTool(BaseTool):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> tuple[str, dict]:
-        run_input = {"usernames": [username], "resultsLimit": results_limit}
+        # Use `directUrls` + `resultsType="details"` instead of the actor's
+        # `usernames` field. Verified live against apify/instagram-scraper
+        # (2026-04): the `usernames` -> URL builder silently DROPS handles
+        # containing dots (e.g. `simonwen.eth`, common ENS-style IG
+        # handles), returning {"error":"no_items","errorDescription":
+        # "Empty or private data for provided input"} even for fully
+        # public accounts. directUrls bypasses the bug; resultsType
+        # "details" returns the profile fields plus the most recent ~12
+        # posts inline so we don't lose post content vs the old shape.
+        run_input = {
+            "directUrls": [f"https://www.instagram.com/{username}/"],
+            "resultsType": "details",
+            "resultsLimit": results_limit,
+        }
         result = await _run_actor(self.client, self.actor_id, run_input)
         content = json.dumps({"username": username, "items": result["items"]}, default=str)
         return content, result

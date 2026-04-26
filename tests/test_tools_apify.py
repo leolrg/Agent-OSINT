@@ -26,8 +26,29 @@ async def test_apify_instagram_runs_actor():
     tool = ApifyInstagramTool(client=client, actor_id="apify~instagram-scraper")
     content, artifact = await tool._arun(username="jdoe")
     actor.call.assert_awaited_once()
+    # We pass `directUrls` (NOT `usernames`) because the actor's usernames
+    # input silently drops dotted handles like `simonwen.eth`. Confirmed
+    # live against apify/instagram-scraper, 2026-04.
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert run_input["directUrls"] == ["https://www.instagram.com/jdoe/"]
+    assert run_input["resultsType"] == "details"
+    assert "usernames" not in run_input
     assert artifact["items"][0]["username"] == "jdoe"
     assert "jdoe" in content
+
+
+async def test_apify_instagram_handles_dotted_username():
+    """Regression for the actor's `usernames`-handling bug: dotted handles
+    like `simonwen.eth` must flow through directUrls so the actor doesn't
+    return its no_items placeholder."""
+    client, actor, dataset = _fake_client(
+        [{"username": "simonwen.eth", "biography": "gz | nyc", "followersCount": 2323}]
+    )
+    tool = ApifyInstagramTool(client=client, actor_id="apify~instagram-scraper")
+    content, artifact = await tool._arun(username="simonwen.eth")
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert run_input["directUrls"] == ["https://www.instagram.com/simonwen.eth/"]
+    assert artifact["items"][0]["biography"] == "gz | nyc"
 
 
 async def test_apify_linkedin_runs_actor():
