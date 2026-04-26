@@ -37,7 +37,7 @@ from langgraph.prebuilt import create_react_agent
 from osint.errors import ScanConfigError, ScanStopped
 from osint.llm_cost import LLMCostCallback
 from osint.log import configure_logging, logger
-from osint.prompts import (
+from osint.agents.react_v1.prompts import (
     build_deepen_prompt,
     build_synthesis_prompt,
     build_system_prompt,

@@ -1,4 +1,4 @@
-from osint.prompts import (
+from osint.agents.react_v1.prompts import (
     build_deepen_prompt,
     build_system_prompt,
     build_synthesis_prompt,
