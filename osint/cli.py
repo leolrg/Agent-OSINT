@@ -19,8 +19,16 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Free-form subject description. If omitted, read from stdin.")
     s.add_argument("--scans-dir", type=Path, default=Path("./scans"))
     s.add_argument("--budget-usd", type=float, default=5.0)
-    s.add_argument("--max-calls", type=int, default=30)
+    s.add_argument("--max-calls", type=int, default=100)
     s.add_argument("--max-seconds", type=int, default=600)
+    s.add_argument("--passes", type=int, default=1,
+                   help="Number of agent passes per scan. Pass 1 is the "
+                        "initial investigation; passes 2..N are 'deepen' "
+                        "passes that critique the previous pass's draft and "
+                        "use new tool calls to fill gaps. Budget/call/time "
+                        "caps apply to the WHOLE scan, not per-pass — so if "
+                        "you bump --passes you may also want a higher "
+                        "--budget-usd / --max-calls. Default: 1.")
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
     s.add_argument("--env-file", type=Path, default=None,
@@ -150,6 +158,7 @@ async def main(argv: list[str] | None = None) -> int:
         "budget_usd": args.budget_usd,
         "max_tool_calls": args.max_calls,
         "max_wall_clock_sec": args.max_seconds,
+        "passes": args.passes,
     }
     if args.enable:
         kwargs["enabled_tools"] = set(args.enable)

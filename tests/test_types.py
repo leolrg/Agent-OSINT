@@ -8,6 +8,8 @@ def test_scanconfig_defaults():
     assert c.max_tool_calls == 30
     assert c.max_wall_clock_sec == 600
     assert c.tool_options == {}
+    # Single-pass by default — back-compat with all pre-deepen scans.
+    assert c.passes == 1
     # grok-4.20 default pointing at xAI's OpenAI-compatible endpoint.
     assert c.llm.model == "grok-4.20"
     assert c.llm.base_url == "https://api.x.ai/v1"

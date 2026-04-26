@@ -35,6 +35,13 @@ class ScanConfig(BaseModel):
     max_wall_clock_sec: PositiveInt = 600
     tool_options: dict[str, dict] = Field(default_factory=dict)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    # Number of agent passes per scan. Pass 1 is the initial investigation;
+    # passes 2..N are "deepen" passes that receive the previous pass's draft
+    # report and explicitly look for gaps / shallow sections / unfollowed
+    # leads to extend. Budget, max_tool_calls, and max_wall_clock_sec apply
+    # to the WHOLE scan (not per-pass) so the cap is honoured no matter
+    # how many passes are configured.
+    passes: PositiveInt = 1
 
 
 class ToolCallRecord(BaseModel):

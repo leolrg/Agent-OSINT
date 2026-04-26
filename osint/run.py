@@ -37,6 +37,7 @@ from osint.errors import ScanConfigError, ScanStopped
 from osint.llm_cost import LLMCostCallback
 from osint.log import configure_logging, logger
 from osint.prompts import (
+    build_deepen_prompt,
     build_synthesis_prompt,
     build_system_prompt,
     format_tool_calls_for_synthesis,
@@ -118,6 +119,125 @@ def _serialize_messages(messages: list) -> list[dict]:
     return out
 
 
+def _merge_identifiers(prev: dict, new: dict) -> dict:
+    """Union-merge identifier dicts across passes.
+
+    Each value is expected to be a list (emails, usernames, urls, etc.);
+    we keep order and deduplicate. Non-list values fall through to
+    "latest wins". Used to combine pass N's extracted_identifiers into
+    the running scan-state record so a later pass cannot ACCIDENTALLY
+    drop something an earlier pass found by simply forgetting to repeat
+    it in its JSON tail.
+    """
+    merged: dict = {}
+    for key in set(prev.keys()) | set(new.keys()):
+        prev_v = prev.get(key)
+        new_v = new.get(key)
+        if isinstance(prev_v, list) and isinstance(new_v, list):
+            seen: list = []
+            for item in prev_v + new_v:
+                if item not in seen:
+                    seen.append(item)
+            merged[key] = seen
+        elif isinstance(prev_v, list):
+            merged[key] = list(prev_v)
+        elif isinstance(new_v, list):
+            merged[key] = list(new_v)
+        else:
+            # Both non-list (rare). Latest wins.
+            merged[key] = new_v if new_v is not None else prev_v
+    return merged
+
+
+async def _run_one_pass(
+    *,
+    pass_num: int,
+    total_passes: int,
+    subject: str,
+    state: ScanState,
+    llm: BaseChatModel,
+    cost_cb: LLMCostCallback,
+    tools: list,
+    config: ScanConfig,
+    previous_report_text: str | None,
+) -> tuple[dict, StopReason | None]:
+    """Run one agent pass. Returns (parsed_report_dict, stop_reason_or_None).
+
+    Pass 1 uses the standard system prompt + a "Begin the scan." seed.
+    Passes 2..N use the deepen prompt that embeds the previous pass's
+    report as context and instructs the agent to find gaps and extend.
+
+    The shared `state` accumulates messages and tool calls across passes
+    — there's only ONE scan budget, regardless of how many passes run.
+    """
+    is_first_pass = pass_num == 1
+
+    if is_first_pass:
+        system_text = build_system_prompt(subject, sorted(config.enabled_tools))
+        seed_message = HumanMessage(content="Begin the scan.")
+    else:
+        system_text = build_deepen_prompt(
+            subject=subject,
+            tool_names=sorted(config.enabled_tools),
+            previous_report_text=previous_report_text or "",
+            pass_num=pass_num,
+            total_passes=total_passes,
+        )
+        seed_message = HumanMessage(
+            content=(
+                f"Begin pass {pass_num} of {total_passes}. Critique the draft "
+                f"above, identify gaps and unfollowed leads, then run NEW "
+                f"tool calls to fill them. Produce v{pass_num} of the report."
+            )
+        )
+
+    agent = create_react_agent(
+        llm,
+        tools,
+        prompt=SystemMessage(content=system_text),
+    )
+
+    initial_state = {"messages": [seed_message]}
+    invoke_config: dict[str, Any] = {
+        "recursion_limit": 2 * config.max_tool_calls,
+        "callbacks": [cost_cb],
+    }
+
+    stop_reason: StopReason | None = None
+    agent_result: dict | None = None
+    try:
+        agent_result = await asyncio.wait_for(
+            agent.ainvoke(initial_state, config=invoke_config),
+            timeout=config.max_wall_clock_sec,
+        )
+    except ScanStopped as e:
+        stop_reason = StopReason(e.reason)
+    except asyncio.TimeoutError:
+        stop_reason = StopReason.WALL_CLOCK
+    except GraphRecursionError:
+        stop_reason = StopReason.MAX_CALLS
+
+    if agent_result is not None:
+        state.messages.extend(_serialize_messages(agent_result.get("messages", [])))
+
+    if stop_reason is None and agent_result is not None:
+        final_text = _extract_final_text(agent_result)
+        return parse_report(final_text), None
+
+    # Cap-cut path: synthesize from what we have and return.
+    logger.info(
+        "scan.pass.synthesize",
+        scan_id=state.scan_id,
+        pass_num=pass_num,
+        stop_reason=stop_reason.value if stop_reason else "unknown",
+    )
+    synth_text, synth_msgs = await _synthesize(
+        llm, subject, state, stop_reason.value if stop_reason else "unknown", cost_cb,
+    )
+    state.messages.extend(_serialize_messages(synth_msgs))
+    return parse_report(synth_text), stop_reason
+
+
 async def scan(
     subject: str,
     config: ScanConfig = ScanConfig(),
@@ -130,68 +250,81 @@ async def scan(
 
     llm = llm or _default_llm(config)
     state = ScanState(scan_id=new_scan_id(), subject=subject, config=config)
-    logger.info("scan.start", scan_id=state.scan_id, enabled_tools=sorted(config.enabled_tools))
+    logger.info(
+        "scan.start",
+        scan_id=state.scan_id,
+        enabled_tools=sorted(config.enabled_tools),
+        passes=config.passes,
+    )
 
     try:
         tools = build_tools(config, state)
-
-        # Note: `prompt=` is the current arg name in langgraph >=0.2.60.
-        # Older releases accepted `state_modifier=` as a deprecated alias;
-        # newer releases removed it.
-        agent = create_react_agent(
-            llm,
-            tools,
-            prompt=SystemMessage(
-                content=build_system_prompt(subject, sorted(config.enabled_tools))
-            ),
-        )
-
         cost_cb = LLMCostCallback(state)
-        initial_state = {"messages": [HumanMessage(content="Begin the scan.")]}
-        invoke_config: dict[str, Any] = {
-            "recursion_limit": 2 * config.max_tool_calls,
-            "callbacks": [cost_cb],
-        }
 
-        stop_reason: StopReason | None = None
-        agent_result: dict | None = None
-        try:
-            agent_result = await asyncio.wait_for(
-                agent.ainvoke(initial_state, config=invoke_config),
-                timeout=config.max_wall_clock_sec,
+        # Multi-pass loop. Pass 1 = initial investigation (standard system
+        # prompt + "Begin the scan." seed). Passes 2..N = "deepen" passes
+        # that receive the previous pass's report as context and try to
+        # fill gaps. Budget/call/time caps apply to the whole scan, not
+        # per-pass — once any pass cap-cuts, we stop and finalize.
+        previous_report_text: str | None = None
+        for pass_num in range(1, config.passes + 1):
+            # Skip remaining passes if a cap was already hit by the
+            # previous pass (which is reflected in state.should_stop()).
+            stopped, reason = state.should_stop()
+            if stopped:
+                logger.info(
+                    "scan.pass.skipped",
+                    scan_id=state.scan_id,
+                    pass_num=pass_num,
+                    reason=reason.value,
+                )
+                break
+
+            logger.info(
+                "scan.pass.start",
+                scan_id=state.scan_id,
+                pass_num=pass_num,
+                total_passes=config.passes,
             )
-        except ScanStopped as e:
-            stop_reason = StopReason(e.reason)
-        except asyncio.TimeoutError:
-            stop_reason = StopReason.WALL_CLOCK
-        except GraphRecursionError:
-            stop_reason = StopReason.MAX_CALLS
-
-        # Capture the full LangGraph message history (system / human / AI /
-        # tool messages, including AIMessage.tool_calls and ToolMessage
-        # contents) for the audit log. Available even when ainvoke errored
-        # is partial; agent_result is None only if we never made it past
-        # the first superstep, in which case there's nothing to capture
-        # from the agent loop.
-        if agent_result is not None:
-            state.messages = _serialize_messages(agent_result.get("messages", []))
-
-        if stop_reason is None and agent_result is not None:
-            final_text = _extract_final_text(agent_result)
-            parsed = parse_report(final_text)
-            state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
-        else:
-            logger.info("scan.synthesize", scan_id=state.scan_id,
-                        stop_reason=stop_reason.value if stop_reason else "unknown")
-            synth_text, synth_msgs = await _synthesize(
-                llm, subject, state, stop_reason.value if stop_reason else "unknown", cost_cb,
+            parsed, pass_stop_reason = await _run_one_pass(
+                pass_num=pass_num,
+                total_passes=config.passes,
+                subject=subject,
+                state=state,
+                llm=llm,
+                cost_cb=cost_cb,
+                tools=tools,
+                config=config,
+                previous_report_text=previous_report_text,
             )
-            # Append the synthesis exchange to the message history so the
-            # audit log shows both the truncated agent loop AND the
-            # synthesis prompt + response that produced the final report.
-            state.messages.extend(_serialize_messages(synth_msgs))
-            parsed = parse_report(synth_text)
-            state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
+
+            # Merge identifiers across passes so a later pass that forgot
+            # to repeat a known identifier doesn't drop it from the final
+            # report. Latest report TEXT wins (it's by design a superset
+            # of the previous one when the deepen prompt is followed).
+            merged_identifiers = _merge_identifiers(
+                state.extracted_identifiers,
+                parsed.get("extracted_identifiers") or {},
+            )
+            state.record_final_report(
+                parsed.get("report") or {},
+                identifiers=merged_identifiers,
+            )
+            previous_report_text = (parsed.get("report") or {}).get("text") or ""
+
+            logger.info(
+                "scan.pass.done",
+                scan_id=state.scan_id,
+                pass_num=pass_num,
+                cap_cut=pass_stop_reason.value if pass_stop_reason else None,
+                cumulative_tool_calls=len(state.tool_calls),
+                cumulative_cost_usd=state.total_cost_usd,
+            )
+
+            # If THIS pass cap-cut, don't start a new pass — we're already
+            # at budget/time/recursion limit.
+            if pass_stop_reason is not None:
+                break
 
         path = await write_scan_json(scans_dir, state, status="done")
         # Companion human-readable render. JSON stays the source of truth;

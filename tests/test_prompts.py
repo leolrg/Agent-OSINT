@@ -1,4 +1,10 @@
-from osint.prompts import build_system_prompt, build_synthesis_prompt, format_tool_calls_for_synthesis, parse_report
+from osint.prompts import (
+    build_deepen_prompt,
+    build_system_prompt,
+    build_synthesis_prompt,
+    format_tool_calls_for_synthesis,
+    parse_report,
+)
 
 
 def test_system_prompt_contains_subject_and_tools():
@@ -133,6 +139,48 @@ def test_parse_report_prose_plus_tail_identifiers_json():
     # The JSON block itself was stripped.
     assert "```json" not in r["report"]["text"]
     assert "extracted_identifiers" not in r["report"]["text"]
+
+
+def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
+    """The deepen prompt must include (a) the previous pass's report text
+    so the LLM can critique it, (b) explicit pass-N-of-N labelling, and
+    (c) the same routing guidance the system prompt uses."""
+    p = build_deepen_prompt(
+        subject="Jane Doe, NYC",
+        tool_names=["tavily_search", "tavily_extract", "apify_linkedin"],
+        previous_report_text="**Executive Summary**\nJane is a SWE...",
+        pass_num=2,
+        total_passes=3,
+    )
+    # Pass labelling
+    assert "pass 2 of 3" in p
+    assert "PASS 1" in p or "pass 1" in p.lower()
+    # Previous report is embedded verbatim
+    assert "Jane is a SWE" in p
+    # Subject is carried through
+    assert "Jane Doe, NYC" in p
+    # Tool list + routing guidance carried over
+    assert "tavily_search" in p
+    assert "apify_linkedin" in p
+    # Critique-then-extend framing is present
+    lower = p.lower()
+    assert "gap" in lower
+    assert "extend" in lower or "new evidence" in lower
+    # Output contract still mentions the JSON-tail with extracted_identifiers
+    assert "extracted_identifiers" in p
+
+
+def test_build_deepen_prompt_handles_missing_previous_report():
+    """If the previous report's text was empty, the prompt should still
+    render without raising and include a placeholder."""
+    p = build_deepen_prompt(
+        subject="Jane",
+        tool_names=["tavily_search"],
+        previous_report_text="",
+        pass_num=2,
+        total_passes=2,
+    )
+    assert "no draft text available" in p
 
 
 def test_parse_report_pure_prose_no_json():

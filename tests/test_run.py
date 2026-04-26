@@ -55,6 +55,71 @@ async def test_scan_happy_path_no_tool_calls(tmp_path):
     assert result.path.exists()
 
 
+async def test_scan_runs_multiple_passes_and_merges_identifiers(tmp_path):
+    """passes=2 invokes the agent twice. Each pass produces its own report
+    and identifier set; the FINAL state has the latest report's text plus
+    the union of both passes' identifiers (so a deepen pass that forgets
+    to repeat an earlier email doesn't drop it from the audit trail)."""
+    import json
+
+    PASS1_FINAL = (
+        "**Executive Summary**\n\nPass 1: Jane is a SWE.\n\n"
+        '```json\n{"extracted_identifiers":'
+        '{"emails":["jane@old.com"],"usernames":["jdoe"]}}\n```'
+    )
+    PASS2_FINAL = (
+        "**Executive Summary**\n\nPass 2: Jane is a SWE in NYC.\n\n"
+        '```json\n{"extracted_identifiers":'
+        '{"emails":["jane@new.com"],"name_variations":["Jane D."]}}\n```'
+    )
+    fake = BindableFakeModel(responses=[
+        _ai_final(PASS1_FINAL),
+        _ai_final(PASS2_FINAL),
+    ])
+    result = await scan(
+        subject="Jane",
+        config=ScanConfig(enabled_tools={"tavily_search"}, passes=2),
+        llm=fake,
+        scans_dir=tmp_path,
+    )
+    # The latest pass's report text wins.
+    assert "Pass 2" in result.report.get("text", "")
+    # Identifiers are union-merged across passes — neither pass's findings
+    # are dropped just because the other forgot to repeat them.
+    ids = result.extracted_identifiers
+    assert set(ids.get("emails", [])) == {"jane@old.com", "jane@new.com"}
+    assert ids.get("usernames") == ["jdoe"]            # from pass 1 only
+    assert ids.get("name_variations") == ["Jane D."]   # from pass 2 only
+
+    # Both passes should appear in the message log captured to JSON.
+    data = json.loads(result.path.read_text())
+    ai_msgs = [m for m in data["messages"] if m["type"] == "ai"]
+    assert any("Pass 1" in (m.get("content") or "") for m in ai_msgs)
+    assert any("Pass 2" in (m.get("content") or "") for m in ai_msgs)
+
+
+async def test_scan_passes_default_to_one(tmp_path):
+    """Back-compat: omitting `passes` runs exactly one pass (no deepen),
+    matching the pre-multi-pass behaviour."""
+    fake = BindableFakeModel(responses=[_ai_final(FINAL_JSON)])
+    result = await scan(
+        subject="Jane",
+        config=ScanConfig(enabled_tools={"tavily_search"}),  # no passes=
+        llm=fake,
+        scans_dir=tmp_path,
+    )
+    # Only one final-AIMessage in the captured history (pass 1, terminal).
+    import json
+    data = json.loads(result.path.read_text())
+    final_ai_msgs = [
+        m for m in data["messages"]
+        if m["type"] == "ai"
+        and not (m.get("tool_calls") or [])
+        and "extracted_identifiers" in (m.get("content") or "")
+    ]
+    assert len(final_ai_msgs) == 1
+
+
 async def test_scan_captures_full_message_history(tmp_path):
     """The agent loop's message list (system + human seed + AI replies)
     lands in the scan JSON's `messages` field after a successful run."""
