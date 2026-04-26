@@ -163,8 +163,8 @@ async def test_scan_captures_full_message_history(tmp_path):
 
 
 async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch):
-    import osint.run as run_module
-    monkeypatch.setattr(run_module, "create_react_agent",
+    import osint.agents.react_v1.runner as runner_module
+    monkeypatch.setattr(runner_module, "create_react_agent",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):
         await scan(subject="Jane", config=ScanConfig(enabled_tools={"web_search"}),
@@ -177,7 +177,7 @@ async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch
 
 
 async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
-    import osint.run as run_module
+    import osint.agents.react_v1.runner as runner_module
     from osint.errors import ScanStopped
 
     async def raise_stopped(*_a, **_k):
@@ -185,7 +185,7 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
     fake_agent = MagicMock()
     fake_agent.ainvoke = AsyncMock(side_effect=raise_stopped)
-    monkeypatch.setattr(run_module, "create_react_agent", lambda *a, **k: fake_agent)
+    monkeypatch.setattr(runner_module, "create_react_agent", lambda *a, **k: fake_agent)
 
     synth_llm = MagicMock()
     synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))
@@ -201,7 +201,7 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
 
 async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
-    import osint.run as run_module
+    import osint.agents.react_v1.runner as runner_module
     import asyncio
 
     async def hang(*_a, **_k):
@@ -209,7 +209,7 @@ async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
 
     fake_agent = MagicMock()
     fake_agent.ainvoke = AsyncMock(side_effect=hang)
-    monkeypatch.setattr(run_module, "create_react_agent", lambda *a, **k: fake_agent)
+    monkeypatch.setattr(runner_module, "create_react_agent", lambda *a, **k: fake_agent)
 
     synth_llm = MagicMock()
     synth_llm.ainvoke = AsyncMock(return_value=AIMessage(content=FINAL_JSON))
