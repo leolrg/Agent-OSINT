@@ -96,6 +96,50 @@ async def test_apify_twitter_requires_handle_or_query():
         await tool._arun()
 
 
+async def test_actors_have_per_actor_timeouts():
+    """Every actor.call must pass a `timeout_secs` so a stuck actor can't
+    block the scan for its full server-side default (often 1 hour).
+    Specifically `gentle_cloud~twitter-tweets-scraper` previously timed
+    out at 60 minutes when its shared X cookie pool ran dry — a per-call
+    cap of 120s makes that mode-of-failure cheap."""
+    from osint.tools.apify import (
+        _ACTOR_TIMEOUT_SECS,
+        DEFAULT_GOOGLE_SEARCH_ACTOR,
+        DEFAULT_IG_ACTOR,
+        DEFAULT_LI_ACTOR,
+        DEFAULT_TW_ACTOR,
+        DEFAULT_WEB_CRAWLER_ACTOR,
+    )
+    # Every default actor must have a timeout configured.
+    for actor in (
+        DEFAULT_GOOGLE_SEARCH_ACTOR,
+        DEFAULT_WEB_CRAWLER_ACTOR,
+        DEFAULT_IG_ACTOR,
+        DEFAULT_LI_ACTOR,
+        DEFAULT_TW_ACTOR,
+    ):
+        assert actor in _ACTOR_TIMEOUT_SECS, f"{actor} missing from _ACTOR_TIMEOUT_SECS"
+    # Twitter must be tightly bounded — that's the whole point of this gate.
+    assert _ACTOR_TIMEOUT_SECS[DEFAULT_TW_ACTOR] <= 180, (
+        "Twitter actor timeout must stay <= 3 min so a dead cookie pool "
+        "can't burn 60 min of wall clock per call."
+    )
+
+    # Each Apify-backed tool must actually pass its actor's timeout into
+    # actor.call(timeout_secs=...) — verified by inspecting the mock call.
+    for ToolCls, run_kwargs, expected_actor in (
+        (ApifyInstagramTool, {"username": "x"}, DEFAULT_IG_ACTOR),
+        (ApifyTwitterTool, {"handle": "x"}, DEFAULT_TW_ACTOR),
+    ):
+        client, actor_mock, _ = _fake_client([{"x": 1}])
+        tool = ToolCls(client=client)
+        await tool._arun(**run_kwargs)
+        kwargs = actor_mock.call.call_args.kwargs
+        assert kwargs.get("timeout_secs") == _ACTOR_TIMEOUT_SECS[expected_actor], (
+            f"{ToolCls.__name__} did not forward timeout_secs to actor.call"
+        )
+
+
 async def test_apify_metadata():
     ig = ApifyInstagramTool(client=MagicMock(), actor_id="x")
     li = ApifyLinkedInTool(client=MagicMock(), actor_id="x")

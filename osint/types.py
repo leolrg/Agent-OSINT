@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, NonNegativeFloat, PositiveFloat, Positive
 
 
 def default_enabled_tools() -> set[str]:
-    return {"tavily_search", "tavily_extract", "maigret"}
+    return {"web_search", "web_extract", "maigret"}
 
 
 class LLMPricing(BaseModel):

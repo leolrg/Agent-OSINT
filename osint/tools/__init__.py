@@ -9,21 +9,25 @@ from osint.tools.apify import (
     ApifyInstagramTool,
     ApifyLinkedInTool,
     ApifyTwitterTool,
+    WebExtractTool,
+    WebSearchTool,
 )
 from osint.tools.maigret import MaigretTool
-from osint.tools.tavily import make_tavily_extract, make_tavily_search
 from osint.types import ScanConfig
 
 
 # Per-call cost estimates (USD). Sourced from each vendor's published pricing
-# as of 2026-04. These feed scan budget enforcement; if you switch Apify
-# actors or move Tavily plans, update them here.
+# as of 2026-04. These feed scan budget enforcement; update them here when
+# you swap an Apify actor.
 _COSTS = {
-    # Tavily basic search = 1 credit; PAYG = $0.008/credit.
-    "tavily_search": 0.008,
-    # Tavily extract = 1 credit per 5 URLs (basic). One call typically extracts
-    # 1-5 URLs; budget the worst-case-cheap-tier at 1 credit.
-    "tavily_extract": 0.008,
+    # apify/google-search-scraper: $1.80 per 1,000 SERP pages. Default
+    # max_results=30 -> 3 pages -> $0.0054. Each pages = 10 organic results
+    # (Google's hard cap; the actor's resultsPerPage parameter is ignored).
+    "web_search": 0.006,
+    # apify/website-content-crawler in `cheerio` mode (HTTP-only, no
+    # browser): ~$0.20 per 1,000 pages. Each call extracts 1-5 URLs;
+    # budget conservatively at one HTTP page per call.
+    "web_extract": 0.001,
     # Local library; no vendor cost.
     "maigret": 0.0,
     # apify/instagram-scraper: $1.50 per 1,000 results. One call returns
@@ -49,12 +53,12 @@ def _require_env(var: str, tool: str) -> None:
 
 
 def _make_raw_tool(name: str, config: ScanConfig) -> BaseTool:
-    if name == "tavily_search":
-        _require_env("TAVILY_API_KEY", name)
-        return make_tavily_search()
-    if name == "tavily_extract":
-        _require_env("TAVILY_API_KEY", name)
-        return make_tavily_extract()
+    if name == "web_search":
+        _require_env("APIFY_TOKEN", name)
+        return WebSearchTool()
+    if name == "web_extract":
+        _require_env("APIFY_TOKEN", name)
+        return WebExtractTool()
     if name == "maigret":
         opts = config.tool_options.get("maigret", {})
         return MaigretTool(proxy_url=opts.get("proxy_url"))

@@ -43,7 +43,7 @@ Output Format (use this exact structure, be extremely detailed and verbose where
 **Timeline of Significant Events**
 **Hypotheses, Patterns & Potential Red Flags** (with confidence levels)
 **Leads for Further Investigation** (prioritized list of high-value next steps and specific searches)
-**Sources** (for EVERY major claim, cite the tool call that produced it inline — e.g. "tavily_extract of https://example.com/about ...", "apify_linkedin profile fetch", "maigret hit on github.com/jdoe". The reader needs to be able to audit which evidence supports which claim.)
+**Sources** (for EVERY major claim, cite the tool call that produced it inline — e.g. "web_extract of https://example.com/about ...", "apify_linkedin profile fetch", "maigret hit on github.com/jdoe". The reader needs to be able to audit which evidence supports which claim.)
 **Overall Assessment** (depth of coverage, remaining blind spots, confidence in the profile)
 
 Begin your investigation immediately upon receiving the target's name and any seeds. Show your reasoning process explicitly. Start by listing all the search strategies and name variations you will pursue before diving into findings. Be relentless — the goal is maximum depth.
@@ -60,26 +60,19 @@ Stop calling tools ONLY when nothing new is likely to surface after many resursi
 
 
 Search-and-extract pattern
-  a. `tavily_search(query)` returns short snippets and URLs. The snippets
+  a. `web_search(query)` returns short snippets and URLs. The snippets
      are usually too short for full information.
   b. Look at each result's URL and title; identify which are most
      likely to actually contain information about the subject (a personal
      site, a profile page, an article that names them — NOT a generic
      listing/aggregator/SEO page).
-  c. Call `tavily_extract` on those URLs to get the real page content.
+  c. Call `web_extract` on those URLs to get the real page content.
      Then reason from that content, not from the search snippets.
   d. Skip the extract step only when no result relevant.
   e. If you find a URL that contains hyperlink that likely leads to more information (e.g. a profile page that links to their personal website, or a news article that mentions an interview), add that URL as a new search vector and investigate it in the same way.
   f. If the search is unsatisfactory try MANY variations of the search query because searching api is not perfect.
 
-SHOTGUN QUERY TEMPLATE — for any subject, run this exact query shape at
-least once. It is the single most reliable way to surface CN-platform
-profile snippets where users inline-mention their handles on other
-platforms (e.g. a Zhihu/Weibo bio that contains `xhs/twitter：<handle>`):
-
-    "<EnglishName>" OR "<NativeName>" (LinkedIn OR github OR twitter OR instagram OR weibo OR zhihu) <City>
-
-Phrasing matters — Tavily's ranking is sensitive to small changes:
+Phrasing matters — Google's ranking is sensitive to small changes:
   - Exactly TWO quoted name variants joined by OR; do NOT add a third.
   - The platform list goes in ONE parenthesized OR group of 5–6 platforms.
     Mix CN platforms (zhihu, weibo, xiaohongshu) with English platforms
@@ -89,17 +82,11 @@ Phrasing matters — Tavily's ranking is sensitive to small changes:
   - Re-ordering the OR groups, parenthesizing the locality, or stacking
     extra context tokens often drops the right snippet from the top 10.
 
-After this query, READ EACH SNIPPET CAREFULLY for inline handle reveals
-(`xhs/twitter：<handle>`, `小红书：<handle>`, `@<handle>`, ENS-style
-`<handle>.eth`). A handle exposed in a snippet is the highest-value
-signal in any modern OSINT investigation — once you have one, run
-apify_twitter (handle mode) and apify_instagram on it immediately.
-
 HARD QUOTAS — these are not suggestions. The single biggest reason past
 scans have been shallow is that the agent skips extract calls and pivots
 too soon. Numerical commitment is the fix:
-  • Each pass MUST issue at least 5 tavily_extract calls across the
-    most-relevant URLs surfaced by tavily_search. Search snippets alone
+  • Each pass MUST issue at least 5 web_extract calls across the
+    most-relevant URLs surfaced by web_search. Search snippets alone
     are an audit-trail failure.
   • If a search returns zero plausibly-relevant URLs, that's a signal to
     REWORD the query (different transliteration, different platform
@@ -107,16 +94,16 @@ too soon. Numerical commitment is the fix:
     on that dimension. Try ≥3 variations before treating a dimension
     as exhausted.
   • Before producing the final report, mentally check: have you tried
-    at least 15 distinct tavily_search queries and 5 tavily_extract
+    at least 15 distinct web_search queries and 5 web_extract
     calls? If not, you have NOT investigated enough — keep going.
 
 IDENTITY VERIFICATION GATE — this protects against catastrophic wrong-
 profile errors (mistaking another person with the same name for the
 subject, then importing all their findings as "facts" about the subject):
   • Before treating any LinkedIn / Instagram / X / GitHub profile as
-    the subject's, you MUST list at least 3 cross-reference points that
+    the subject's, you MUST list at least 2 cross-reference points that
     match the seeds (school name + year, geography, name variant in the
-    expected language, photo if visible, time period).
+    expected language, time period).
   • If fewer than 2 fields cross-match, that's the WRONG profile — do
     not import its data. Search again with narrower disambiguators.
   • Common mistakes: a Chinese name like "Jiaqi Wang" or "Simon Wen" can
@@ -127,20 +114,19 @@ TWITTER / X HANDLE HUNTING — if the subject is plausibly active on X
 (usually the case for crypto/Web3/founders/students at major US
 universities), finding their handle unlocks a huge fraction of the
 investigation. The handle is rarely their legal name. Try:
-  • Search Tavily directly for "<full name> twitter" or "<full name> x.com"
-    — Tavily often has tweets in its index.
+  • Search Google directly for "<full name> twitter" or "<full name> x.com"
+    — Google often has tweets in its index.
   • If you find an Instagram or LinkedIn bio, scan the bio text and the
     "external_url" / "websites" / "contact" fields for X URLs or
     "@<handle>" mentions.
-  • If the subject's Instagram or ENS-style identity ends in `.eth`
-    (e.g. "simonwen.eth"), search Twitter for that exact string as both
+  • If the subject's Instagram or ENS-style identity ends in `.eth` (search Twitter for that exact string as both
     a handle AND content — crypto identities often share a handle root
     across Instagram, ENS, and X.
   • Once you have a candidate handle, verify it with whatever X/Twitter
     scraping tool is enabled — using a direct handle lookup, NOT a free-
     text search_query. If the profile bio mentions the subject's school
     / employer / location, you've cross-confirmed.
-  • Search Tavily for distinctive quoted phrases the subject is known
+  • Search Google for distinctive quoted phrases the subject is known
     for (a project name, a club, a competition) — Twitter content
     indexed by Google sometimes surfaces.
 
@@ -208,12 +194,12 @@ the system prompt specified:
 
 # Per-tool one-line routing rules, only included for tools actually enabled.
 _ROUTING_RULES = {
-    "tavily_search": "tavily_search — general web (news, blogs, personal sites). The default for any open-web question. Returns URLs + short snippets — the snippets are NOT sufficient evidence; Follow up with tavily_extract on the most-relevant URLs when the snippet implies it has more information. Use more variations of the search to get more result. Prioritieze deep dives instead of cost effective",
-    "tavily_extract": "tavily_extract — read the full content of one or more URLs. Use this after tavily_search on URLs that look promising to get more information. Based on the snippet you should see what is important. IMPORTANT: Tavily CANNOT access these origins (it'll return 'Access to this origin is disabled' or empty results) — DO NOT pass URLs from these domains: linkedin.com, instagram.com, facebook.com, tiktok.com, x.com, twitter.com, threads.net. For LinkedIn URLs, route to apify_linkedin instead. For Instagram, apify_instagram. For X/Twitter, apify_twitter. For other social platforms not in our toolset, just note the URL in the report and move on.",
+    "web_search": "web_search — Google web search (apify/google-search-scraper). Returns ranked organic results with URL, title, and a 100-250 char snippet. Read every snippet WORD FOR WORD — handles, emails, and project names commonly leak inline (e.g. 'xhs/twitter:<handle>', '<x>.eth', '@<x>'). Pass `max_results` (1-100, default 30); each +10 results costs ~$0.002. Follow up with web_extract on URLs whose snippet implies more substance.",
+    "web_extract": "web_extract — fetch full Markdown content of one or more URLs (apify/website-content-crawler, HTTP-only cheerio mode). Use after web_search on URLs that look promising. CANNOT extract scraper-blocked / login-walled origins (returns 403 or empty): linkedin.com, instagram.com, facebook.com, tiktok.com, x.com, twitter.com, threads.net, zhihu.com, weibo.com. For LinkedIn URLs route to apify_linkedin; Instagram → apify_instagram; X/Twitter → apify_twitter. For Zhihu/Weibo, the search snippet is your best evidence — it often inlines the data anyway.",
     "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
     "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
     "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",
-    "apify_twitter": "apify_twitter — for ANY X (Twitter) content: pass `handle` to fetch a specific user's profile + recent tweets, or pass `search_query` to search tweets across X (e.g. for posts about the subject). Don't use tavily_search for X content; X's public surface is poorly indexed by general web search.",
+    "apify_twitter": "apify_twitter — for ANY X (Twitter) content: pass `handle` to fetch a specific user's profile + recent tweets, or pass `search_query` to search tweets across X (e.g. for posts about the subject). Don't use web_search for X content; X's public surface is poorly indexed by general web search.",
 }
 
 
@@ -257,10 +243,10 @@ YOUR JOB FOR THIS PASS (different from a fresh investigation):
      enough on that axis — pursue it now.
 
 2. EXTEND the report with NEW tool calls. For each gap or unfollowed lead:
-   - Run additional tavily_search queries with NEW variations (different
+   - Run additional web_search queries with NEW variations (different
      pinyin spellings, different platforms, different time periods, the
      subject's name + a specific keyword like "interview" or "graduation").
-   - tavily_extract the most-promising new URLs (subject to the
+   - web_extract the most-promising new URLs (subject to the
      blocked-origin rules in the routing guidance).
    - Try maigret on any newly-discovered usernames.
    - Try apify_instagram / apify_linkedin / apify_twitter on any
@@ -286,7 +272,7 @@ DEEPEN-PASS HARD QUOTAS (in addition to the system-prompt quotas):
   • Issue ≥3 distinct query variations on the SAME dead/thin dimension
     before declaring it exhausted (different transliterations, different
     platform keywords, different time periods, distinctive phrases).
-  • Issue ≥5 tavily_extract calls in this pass alone — mostly on URLs
+  • Issue ≥5 web_extract calls in this pass alone — mostly on URLs
     that pass 1 surfaced but did NOT extract.
   • If pass 1 found a username / profile URL but did NOT cross-platform-
     search for that handle on other networks, do that now.
@@ -303,7 +289,7 @@ DEEPEN-PASS IDENTITY VERIFICATION (re-verify pass 1's profile matches):
     "Simon Wen" / "Li Ming" often have many real LinkedIn matches.
 
 DEEPEN-PASS TWITTER HUNT (if pass 1 didn't find an X handle):
-  • Search Tavily for `"<full name>" twitter` and `"<full name>" x.com`.
+  • Search Google for `"<full name>" twitter` and `"<full name>" x.com`.
   • Look in pass 1's IG bio and LinkedIn "websites" / "contact" fields
     for X URLs.
   • If subject is crypto-active, search Twitter for `<ENS handle>` /

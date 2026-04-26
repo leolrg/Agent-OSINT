@@ -1,4 +1,4 @@
-"""Apify scraper tools — Instagram, LinkedIn, Twitter.
+"""Apify-backed tools — Web Search, Web Extract, Instagram, LinkedIn, Twitter.
 
 Verified against installed `apify-client==2.5.0`. Findings (via inspect):
 
@@ -45,9 +45,37 @@ from osint.errors import ScanConfigError
 # Apify (the company) does NOT publish a LinkedIn profile scraper — that's
 # why we point at the dev_fusion community actor, which is the most-active
 # maintained one ($10 / 1k profiles).
+DEFAULT_GOOGLE_SEARCH_ACTOR = "apify~google-search-scraper"
+DEFAULT_WEB_CRAWLER_ACTOR = "apify~website-content-crawler"
 DEFAULT_IG_ACTOR = "apify~instagram-scraper"
 DEFAULT_LI_ACTOR = "dev_fusion~linkedin-profile-scraper"
 DEFAULT_TW_ACTOR = "gentle_cloud~twitter-tweets-scraper"
+
+
+# Per-actor wall-clock cap (seconds) passed to actor.call(timeout_secs=...).
+# Apify enforces this server-side: when the run hits the cap it transitions
+# to status="TIMED-OUT" and any partial dataset items collected so far are
+# still readable. Without an explicit cap, an actor can sit in retry loops
+# for up to its build-default timeout (often 1 hour) and block the agent
+# turn that's awaiting it. Empirically (2026-04-26), `gentle_cloud/twitter-
+# tweets-scraper` will burn the full 60 minutes whenever its shared X
+# cookie pool gets 429-rate-limited — observed twice in one scan.
+_DEFAULT_TIMEOUT_SECS = 180
+_ACTOR_TIMEOUT_SECS: dict[str, int] = {
+    # Google SERP fetch — even with retry, finishes fast (avg ~12s observed).
+    DEFAULT_GOOGLE_SEARCH_ACTOR: 60,
+    # HTTP-only cheerio crawl. Most pages are <30s; allow generous slack
+    # for sites that 5xx-retry. Anything past 3 min is dead, move on.
+    DEFAULT_WEB_CRAWLER_ACTOR: 180,
+    # IG profile-by-URL is very fast (avg ~5s).
+    DEFAULT_IG_ACTOR: 60,
+    # LinkedIn profile scrape includes proxy rotation; ~25s typical.
+    DEFAULT_LI_ACTOR: 120,
+    # Twitter actor's cookie pool routinely 429s, causing the actor to
+    # retry indefinitely inside its 1-hour cap. Bound it tightly so the
+    # agent isn't blocked on Twitter for 60 min when the pool is dry.
+    DEFAULT_TW_ACTOR: 120,
+}
 
 
 async def _run_actor(
@@ -60,13 +88,20 @@ async def _run_actor(
     Returns a dict shaped {"items": [...], "raw": {"default_dataset_id": ...,
     "items": [...]}} where the raw block is what we persist to the scan log.
 
+    Passes a per-actor `timeout_secs` so a stuck actor (e.g. the Twitter
+    scraper when its cookie pool is exhausted) can't block the scan for
+    its full default run-timeout. On TIMED-OUT we still read whatever
+    partial dataset items the actor managed to push before being killed —
+    that's frequently a usable subset rather than nothing.
+
     Wraps the actor.call() in a thin try/except that re-raises with the
     actor_id embedded in the message, since apify-client's default error
     ("Actor with this name was not found") doesn't say which slug failed —
     making it impossible to diagnose without a stack trace inspection.
     """
+    timeout = _ACTOR_TIMEOUT_SECS.get(actor_id, _DEFAULT_TIMEOUT_SECS)
     try:
-        run = await client.actor(actor_id).call(run_input=run_input)
+        run = await client.actor(actor_id).call(run_input=run_input, timeout_secs=timeout)
     except Exception as e:
         # Re-raise with the actor_id in the message but preserve the original
         # exception via __cause__ for the LangChain tool-error handler.
@@ -85,6 +120,176 @@ async def _run_actor(
         "items": items,
         "raw": {"default_dataset_id": dataset_id, "items": items},
     }
+
+
+# ---------------------------------------------------------------------------
+# Web search — apify/google-search-scraper
+# ---------------------------------------------------------------------------
+
+
+class WebSearchInput(BaseModel):
+    query: str = Field(description="Web search query (Google Search syntax).")
+    max_results: int = Field(
+        default=30, ge=1, le=100,
+        description="Up to ~100 organic results across multiple SERP pages.",
+    )
+
+
+_WEB_SEARCH_DESC = (
+    "Google Web Search via apify/google-search-scraper. Returns ranked "
+    "organic results with URL, title, and a 100–250 char snippet per "
+    "result. Read every snippet word-for-word — handles, emails, and "
+    "project names commonly leak inline.\n\n"
+    "Args:\n"
+    "  query: Google search syntax. Supports OR groups, quoted phrases, "
+    "site:, intitle:, intext:, filetype:.\n"
+    "  max_results: 1–100, default 30. Internally requests "
+    "ceil(max_results/10) SERP pages — Google returns 10/page; the actor's "
+    "resultsPerPage parameter is ignored as of 2026-04 (verified live).\n\n"
+    "Returns: {results: [{url, title, content, position}, ...]}."
+)
+
+
+class WebSearchTool(BaseTool):
+    name: str = "web_search"
+    description: str = _WEB_SEARCH_DESC
+    args_schema: Type[BaseModel] = WebSearchInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_GOOGLE_SEARCH_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_GOOGLE_SEARCH_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        query: str,
+        max_results: int = 30,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        # Google returns 10 per page; actor's resultsPerPage is ignored. To
+        # get N results, request ceil(N/10) pages. Each page costs $0.0018.
+        pages = max(1, (max_results + 9) // 10)
+        run_input = {
+            "queries": query,
+            "maxPagesPerQuery": pages,
+            "saveHtml": False,
+            "saveHtmlToKeyValueStore": False,
+        }
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        # Each dataset item is one SERP page. Flatten organic results across
+        # pages, preserving rank, capped at max_results.
+        organic: list[dict] = []
+        for page in result["items"]:
+            for r in (page.get("organicResults") or []):
+                organic.append({
+                    "url": r.get("url"),
+                    "title": r.get("title"),
+                    "content": r.get("description") or "",
+                    "position": r.get("position"),
+                })
+            if len(organic) >= max_results:
+                break
+        organic = organic[:max_results]
+        artifact = {"query": query, "results": organic, "raw": result["raw"]}
+        content = json.dumps({"query": query, "results": organic}, default=str, ensure_ascii=False)
+        return content, artifact
+
+
+# ---------------------------------------------------------------------------
+# Web extract — apify/website-content-crawler
+# ---------------------------------------------------------------------------
+
+
+class WebExtractInput(BaseModel):
+    urls: list[str] = Field(description="One or more URLs to fetch.")
+
+
+_WEB_EXTRACT_DESC = (
+    "Fetch one or more URLs and return their text content as Markdown via "
+    "apify/website-content-crawler. Use after web_search on URLs that look "
+    "promising — the search snippet alone is often too short.\n\n"
+    "Args:\n"
+    "  urls: list of full https:// URLs. One actor run handles all URLs.\n\n"
+    "Cannot extract login-walled / scraper-blocked origins (returns empty "
+    "or 403): linkedin.com, instagram.com, facebook.com, tiktok.com, "
+    "x.com, twitter.com, threads.net, zhihu.com, weibo.com. For LinkedIn "
+    "route to apify_linkedin; Instagram → apify_instagram; X/Twitter → "
+    "apify_twitter. For Zhihu/Weibo, the search snippet from web_search "
+    "is your best evidence."
+)
+
+
+class WebExtractTool(BaseTool):
+    name: str = "web_extract"
+    description: str = _WEB_EXTRACT_DESC
+    args_schema: Type[BaseModel] = WebExtractInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_WEB_CRAWLER_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_WEB_CRAWLER_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        urls: list[str],
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        # cheerio = HTTP-only fetch (~$0.0002/URL); maxCrawlDepth=0 disables
+        # link-following so we get exactly the URLs we asked for.
+        run_input = {
+            "startUrls": [{"url": u} for u in urls],
+            "maxCrawlPages": len(urls),
+            "maxCrawlDepth": 0,
+            "crawlerType": "cheerio",
+            "saveMarkdown": True,
+            "saveHtml": False,
+        }
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        results = []
+        for it in result["items"]:
+            results.append({
+                "url": it.get("url"),
+                "raw_content": it.get("markdown") or it.get("text") or "",
+            })
+        artifact = {"results": results, "raw": result["raw"]}
+        content = json.dumps({"results": results}, default=str, ensure_ascii=False)
+        return content, artifact
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +315,7 @@ _IG_DESCRIPTION = (
     "Inputs: `username` (without @, required) and `results_limit` (1-50, "
     "default 20) for the number of recent posts. The underlying actor also "
     "supports hashtag search, place search, and post-URL fetch — those are "
-    "not exposed in v1; if you need them, prefer `tavily_search` for the URL "
+    "not exposed in v1; if you need them, prefer `web_search` for the URL "
     "discovery and call this tool by handle."
 )
 
@@ -194,7 +399,7 @@ _LI_DESCRIPTION = (
     "- Some actors also attempt email-address discovery for the profile.\n\n"
     "Input: `profile_url` — the full https://www.linkedin.com/in/<slug>/ URL. "
     "The actor does NOT support free-text people search by name; discover "
-    "the URL first via `tavily_search` and then call this tool."
+    "the URL first via `web_search` and then call this tool."
 )
 
 

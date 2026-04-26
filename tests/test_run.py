@@ -32,8 +32,11 @@ FINAL_JSON = (
 
 
 @pytest.fixture(autouse=True)
-def _tavily_env(monkeypatch):
-    monkeypatch.setenv("TAVILY_API_KEY", "test")
+def _apify_env(monkeypatch):
+    # web_search and web_extract are Apify-backed; APIFY_TOKEN is the auth
+    # env var. Stub it so build_tools() doesn't fail when constructing
+    # the tool list.
+    monkeypatch.setenv("APIFY_TOKEN", "test")
 
 
 async def test_scan_rejects_empty_subject(tmp_path):
@@ -46,7 +49,7 @@ async def test_scan_happy_path_no_tool_calls(tmp_path):
     fake = BindableFakeModel(responses=[_ai_final(FINAL_JSON)])
     result = await scan(
         subject="Jane, j@e",
-        config=ScanConfig(enabled_tools={"tavily_search"}),
+        config=ScanConfig(enabled_tools={"web_search"}),
         llm=fake,
         scans_dir=tmp_path,
     )
@@ -78,7 +81,7 @@ async def test_scan_runs_multiple_passes_and_merges_identifiers(tmp_path):
     ])
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"tavily_search"}, passes=2),
+        config=ScanConfig(enabled_tools={"web_search"}, passes=2),
         llm=fake,
         scans_dir=tmp_path,
     )
@@ -117,7 +120,7 @@ async def test_scan_passes_default_to_one(tmp_path):
     fake = BindableFakeModel(responses=[_ai_final(FINAL_JSON)])
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"tavily_search"}),  # no passes=
+        config=ScanConfig(enabled_tools={"web_search"}),  # no passes=
         llm=fake,
         scans_dir=tmp_path,
     )
@@ -140,7 +143,7 @@ async def test_scan_captures_full_message_history(tmp_path):
     fake = BindableFakeModel(responses=[_ai_final(FINAL_JSON)])
     await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"tavily_search"}),
+        config=ScanConfig(enabled_tools={"web_search"}),
         llm=fake,
         scans_dir=tmp_path,
     )
@@ -164,7 +167,7 @@ async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch
     monkeypatch.setattr(run_module, "create_react_agent",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):
-        await scan(subject="Jane", config=ScanConfig(enabled_tools={"tavily_search"}),
+        await scan(subject="Jane", config=ScanConfig(enabled_tools={"web_search"}),
                    llm=MagicMock(), scans_dir=tmp_path)
     files = list(tmp_path.glob("*.json"))
     assert len(files) == 1
@@ -189,7 +192,7 @@ async def test_scan_synthesizes_on_scan_stopped(tmp_path, monkeypatch):
 
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"tavily_search"}),
+        config=ScanConfig(enabled_tools={"web_search"}),
         llm=synth_llm,
         scans_dir=tmp_path,
     )
@@ -213,7 +216,7 @@ async def test_scan_synthesizes_on_timeout(tmp_path, monkeypatch):
 
     result = await scan(
         subject="Jane",
-        config=ScanConfig(enabled_tools={"tavily_search"}, max_wall_clock_sec=1),
+        config=ScanConfig(enabled_tools={"web_search"}, max_wall_clock_sec=1),
         llm=synth_llm,
         scans_dir=tmp_path,
     )

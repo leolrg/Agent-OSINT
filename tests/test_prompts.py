@@ -10,10 +10,10 @@ from osint.agents.react_v1.prompts import (
 def test_system_prompt_contains_subject_and_tools():
     p = build_system_prompt(
         subject="Jane, NYC, @jdoe",
-        tool_names=["tavily_search", "maigret"],
+        tool_names=["web_search", "maigret"],
     )
     assert "Jane, NYC, @jdoe" in p
-    assert "tavily_search" in p
+    assert "web_search" in p
     assert "maigret" in p
     assert "extracted_identifiers" in p
     assert "```json" in p
@@ -22,14 +22,14 @@ def test_system_prompt_contains_subject_and_tools():
 def test_system_prompt_routes_x_content_to_apify_twitter_when_enabled():
     p = build_system_prompt(
         subject="Jane",
-        tool_names=["tavily_search", "apify_twitter"],
+        tool_names=["web_search", "apify_twitter"],
     )
     assert "apify_twitter" in p
     assert "X (Twitter)" in p or "X content" in p or "X-native" in p
 
 
 def test_system_prompt_omits_x_routing_when_apify_twitter_disabled():
-    p = build_system_prompt(subject="Jane", tool_names=["tavily_search", "maigret"])
+    p = build_system_prompt(subject="Jane", tool_names=["web_search", "maigret"])
     assert "apify_twitter" not in p
 
 
@@ -43,10 +43,10 @@ def test_system_prompt_pushes_extract_after_search():
     workflow. Wording is owned by the user; just assert structure."""
     p = build_system_prompt(
         subject="Jane",
-        tool_names=["tavily_search", "tavily_extract"],
+        tool_names=["web_search", "web_extract"],
     )
-    assert "tavily_extract" in p
-    assert "tavily_search" in p
+    assert "web_extract" in p
+    assert "web_search" in p
     # The search-and-extract pattern block must exist (in some form).
     lower = p.lower()
     assert "search-and-extract" in lower or "search and extract" in lower
@@ -60,7 +60,7 @@ def test_system_prompt_uses_prose_plus_tail_json_format():
     to wrap the report itself in JSON (the old envelope contract)."""
     p = build_system_prompt(
         subject="Jane",
-        tool_names=["tavily_search"],
+        tool_names=["web_search"],
     )
     lower = p.lower()
     # Prose is the report.
@@ -72,18 +72,19 @@ def test_system_prompt_uses_prose_plus_tail_json_format():
     assert '"report":' not in p
 
 
-def test_tavily_extract_routing_rule_warns_about_blocked_origins():
+def test_web_extract_routing_rule_warns_about_blocked_origins():
     """Regression: the prompt must tell the agent NOT to pass LinkedIn /
-    Instagram / X URLs to tavily_extract — Tavily returns 'Access to this
-    origin is disabled' for those, which used to crash the scan loop."""
+    Instagram / X URLs to web_extract — the website-content-crawler gets
+    403 on those, which previously caused the agent to import empty content
+    as if it were the subject's profile."""
     p = build_system_prompt(
         subject="Jane",
-        tool_names=["tavily_extract", "apify_linkedin", "apify_instagram", "apify_twitter"],
+        tool_names=["web_extract", "apify_linkedin", "apify_instagram", "apify_twitter"],
     )
     lower = p.lower()
     # Each blocked domain must be mentioned in the routing rule.
     for domain in ("linkedin.com", "instagram.com"):
-        assert domain in lower, f"prompt should warn about {domain} for tavily_extract"
+        assert domain in lower, f"prompt should warn about {domain} for web_extract"
     # And it should explicitly route to the apify_* alternatives.
     assert "apify_linkedin" in p
     assert "apify_instagram" in p
@@ -92,7 +93,7 @@ def test_tavily_extract_routing_rule_warns_about_blocked_origins():
 def test_system_prompt_requires_source_citations():
     """Reports must cite the tool call that produced each major claim,
     so a reader can audit which evidence supports which finding."""
-    p = build_system_prompt(subject="Jane", tool_names=["tavily_search"])
+    p = build_system_prompt(subject="Jane", tool_names=["web_search"])
     lower = p.lower()
     assert "cite" in lower
     assert "tool call" in lower or "tool_call" in lower
@@ -123,7 +124,7 @@ def test_parse_report_prose_plus_tail_identifiers_json():
     text = (
         "**Executive Summary**\n\n"
         "Jane Doe is a software engineer based in NYC...\n\n"
-        "**Sources**\n- tavily_extract of https://example.com/jane\n\n"
+        "**Sources**\n- web_extract of https://example.com/jane\n\n"
         "```json\n"
         '{"extracted_identifiers": {"emails": ["jane@example.com"], "urls": ["https://example.com/jane"]}}\n'
         "```\n"
@@ -148,9 +149,9 @@ def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
     pass tool-call summary so the agent doesn't retread the same searches."""
     p = build_deepen_prompt(
         subject="Jane Doe, NYC",
-        tool_names=["tavily_search", "tavily_extract", "apify_linkedin"],
+        tool_names=["web_search", "web_extract", "apify_linkedin"],
         previous_report_text="**Executive Summary**\nJane is a SWE...",
-        previous_tool_calls_summary='1. tavily_search({"query":"Jane Doe NYC"}) → {"results":[]}',
+        previous_tool_calls_summary='1. web_search({"query":"Jane Doe NYC"}) → {"results":[]}',
         pass_num=2,
         total_passes=3,
     )
@@ -160,12 +161,12 @@ def test_build_deepen_prompt_embeds_previous_report_and_pass_numbers():
     # Previous report is embedded verbatim
     assert "Jane is a SWE" in p
     # Prior tool-call summary is embedded verbatim
-    assert '1. tavily_search({"query":"Jane Doe NYC"})' in p
+    assert '1. web_search({"query":"Jane Doe NYC"})' in p
     assert "do not repeat" in p.lower() or "avoid retreading" in p.lower() or "find new" in p.lower()
     # Subject is carried through
     assert "Jane Doe, NYC" in p
     # Tool list + routing guidance carried over
-    assert "tavily_search" in p
+    assert "web_search" in p
     assert "apify_linkedin" in p
     # Critique-then-extend framing is present
     lower = p.lower()
@@ -180,7 +181,7 @@ def test_build_deepen_prompt_handles_missing_previous_report_and_calls():
     prompt should still render without raising and include placeholders."""
     p = build_deepen_prompt(
         subject="Jane",
-        tool_names=["tavily_search"],
+        tool_names=["web_search"],
         previous_report_text="",
         previous_tool_calls_summary="",
         pass_num=2,
@@ -200,8 +201,8 @@ def test_parse_report_pure_prose_no_json():
 
 
 def test_synthesis_prompt_with_tool_calls_summary():
-    p = build_synthesis_prompt("budget", '1. tavily_search({"q":"x"}) → {"r":1}')
-    assert "1. tavily_search" in p
+    p = build_synthesis_prompt("budget", '1. web_search({"q":"x"}) → {"r":1}')
+    assert "1. web_search" in p
     assert "budget" in p
 
 
@@ -216,7 +217,7 @@ def test_format_tool_calls_for_synthesis():
     from osint.types import ToolCallRecord
     now = datetime.now(timezone.utc)
     calls = [
-        ToolCallRecord(turn=1, tool="tavily_search", tool_call_id=None,
+        ToolCallRecord(turn=1, tool="web_search", tool_call_id=None,
                        input={"query": "x"}, output={"results": [1, 2, 3]},
                        raw=None, started_at=now, completed_at=now, cost_usd=0.008),
         ToolCallRecord(turn=2, tool="maigret", tool_call_id=None,
@@ -225,6 +226,6 @@ def test_format_tool_calls_for_synthesis():
                        error="RuntimeError: boom"),
     ]
     out = format_tool_calls_for_synthesis(calls)
-    assert "1. tavily_search" in out
+    assert "1. web_search" in out
     assert "2. maigret" in out
     assert "ERROR: RuntimeError: boom" in out

@@ -3,7 +3,7 @@ from osint.types import LLMConfig, LLMPricing, ScanConfig
 
 def test_scanconfig_defaults():
     c = ScanConfig()
-    assert c.enabled_tools == {"tavily_search", "tavily_extract", "maigret"}
+    assert c.enabled_tools == {"web_search", "web_extract", "maigret"}
     assert c.budget_usd == 5.0
     assert c.max_tool_calls == 30
     assert c.max_wall_clock_sec == 600
@@ -46,11 +46,11 @@ def test_scanconfig_swap_llm_to_openai_gpt():
 
 def test_scanconfig_overrides_other_fields():
     c = ScanConfig(
-        enabled_tools={"tavily_search"},
+        enabled_tools={"web_search"},
         budget_usd=1.0,
         tool_options={"maigret": {"proxy_url": "http://p:8080"}},
     )
-    assert c.enabled_tools == {"tavily_search"}
+    assert c.enabled_tools == {"web_search"}
     assert c.tool_options["maigret"]["proxy_url"] == "http://p:8080"
 
 
@@ -62,7 +62,7 @@ from osint.types import ToolCallRecord, ScanResult
 def test_toolcallrecord_defaults():
     now = datetime(2026, 4, 24)
     tc = ToolCallRecord(
-        turn=1, tool="tavily_search", tool_call_id="call_a",
+        turn=1, tool="web_search", tool_call_id="call_a",
         input={"query": "x"}, output={"results": []}, raw={"results": []},
         started_at=now, completed_at=now, cost_usd=0.004,
     )

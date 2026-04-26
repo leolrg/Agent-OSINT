@@ -17,7 +17,7 @@ async def test_write_scan_json(tmp_path: Path):
     state = ScanState(scan_id="abc123", subject="Jane", config=ScanConfig())
     now = datetime.now(timezone.utc)
     state.record_tool_call(ToolCallRecord(
-        turn=1, tool="tavily_search", tool_call_id="c1",
+        turn=1, tool="web_search", tool_call_id="c1",
         input={"q": "x"}, output={"results": []}, raw={"results": []},
         started_at=now, completed_at=now, cost_usd=0.004,
     ))
@@ -33,7 +33,7 @@ async def test_write_scan_json(tmp_path: Path):
     assert data["status"] == "done"
     assert data["extracted_identifiers"] == {"emails": ["j@e"]}
     assert data["report"] == {"summary": "done"}
-    assert data["tool_calls"][0]["tool"] == "tavily_search"
+    assert data["tool_calls"][0]["tool"] == "web_search"
     assert data["tool_cost_usd"] == 0.004
     # default pricing: 5_000 * 2 / 1M + 1_000 * 6 / 1M = 0.010 + 0.006 = 0.016
     assert data["llm_cost_usd"] == 0.016
@@ -72,14 +72,14 @@ async def test_write_scan_markdown_renders_prose_report(tmp_path: Path):
     state = ScanState(scan_id="md1", subject="Jane Doe, NYC", config=ScanConfig())
     now = datetime.now(timezone.utc)
     state.record_tool_call(ToolCallRecord(
-        turn=1, tool="tavily_search", tool_call_id="c1",
+        turn=1, tool="web_search", tool_call_id="c1",
         input={"query": "Jane Doe NYC"}, output={"results": [{"url": "https://x"}]},
         raw={"results": []},
         started_at=now, completed_at=now, cost_usd=0.008,
     ))
     state.record_llm_usage(input_tokens=2_000, output_tokens=500)
     state.record_final_report(
-        {"text": "**Executive Summary**\n\nJane Doe is...\n\n**Sources**\n- tavily_search ..."},
+        {"text": "**Executive Summary**\n\nJane Doe is...\n\n**Sources**\n- web_search ..."},
         identifiers={"emails": ["jane@example.com"], "urls": ["https://x"]},
     )
 
@@ -109,7 +109,7 @@ async def test_write_scan_markdown_renders_prose_report(tmp_path: Path):
 
     # Tool-call log
     assert "## Tool Call Log" in md
-    assert "1. **tavily_search**" in md
+    assert "1. **web_search**" in md
     assert "$0.0080" in md
 
 
@@ -141,7 +141,7 @@ async def test_write_scan_json_includes_messages(tmp_path: Path):
     state.messages = [
         {"type": "system", "content": "you are an OSINT agent"},
         {"type": "human", "content": "Begin the scan."},
-        {"type": "ai", "content": "thinking...", "tool_calls": [{"id": "c1", "name": "tavily_search", "args": {"q": "Jane"}}]},
+        {"type": "ai", "content": "thinking...", "tool_calls": [{"id": "c1", "name": "web_search", "args": {"q": "Jane"}}]},
         {"type": "tool", "content": '{"results":[]}', "tool_call_id": "c1"},
         {"type": "ai", "content": "**Executive Summary** ..."},
     ]
@@ -151,7 +151,7 @@ async def test_write_scan_json_includes_messages(tmp_path: Path):
     assert "messages" in data
     assert len(data["messages"]) == 5
     assert data["messages"][0]["type"] == "system"
-    assert data["messages"][2]["tool_calls"][0]["name"] == "tavily_search"
+    assert data["messages"][2]["tool_calls"][0]["name"] == "web_search"
     assert data["messages"][3]["tool_call_id"] == "c1"
 
 
