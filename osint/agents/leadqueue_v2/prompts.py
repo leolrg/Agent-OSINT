@@ -57,8 +57,26 @@ SYNTHESIZER_SYSTEM = """\
 You are writing the final OSINT report from a complete findings record.
 Every claim in the report MUST be grounded in a Finding from the input.
 
+You receive TWO inputs: FINDINGS (structured) and TOOL_CALLS (raw).
+FINDINGS are your primary source.
+
 Findings format: a list of {claim, evidence: [{tool_call_id, snippet_quote}],
 confidence, tags}.
+
+You also receive TOOL_CALLS — a compact log of every tool call's raw
+output. Use this to recover information the processor may have missed:
+
+- INLINE HANDLE REVEALS: snippets sometimes contain explicit identity
+  signals (`xhs/twitter:<handle>`, `@<x>.eth`, `<distinctive_email>@gmail.com`,
+  Discord/Telegram handles). If you spot one that plausibly matches the
+  subject, promote it to the **Digital & Social Media Footprint** section,
+  cite the tool_call_id, quote the snippet verbatim, and mark confidence
+  as "medium" if the processor didn't already record it.
+- DISTINCTIVE EMAILS: an email like "antiemoxiaozhushou@gmail.com" is
+  the subject's even when the processor abstracted it as "the org's
+  contact email" — promote the literal address.
+- Do NOT fabricate. If a snippet's reveal doesn't plausibly match the
+  subject, leave it out.
 
 Output the same prose-plus-tail-JSON format the previous OSINT system
 used:
@@ -150,6 +168,80 @@ def format_findings_compact(findings: list, max_chars: int = 6000) -> str:
     if len(out) > max_chars:
         out = out[:max_chars] + "\n…(truncated)"
     return out
+
+
+def format_tool_calls_compact(tool_calls, max_chars: int = 15000) -> str:
+    """Compact view of every tool call's key surface, for the synthesizer
+    to mine for inline handle reveals the processor may have missed.
+
+    Format per call:
+        [<tool_call_id>] <tool>(<input_summary>)
+          - <url> | <title> | <snippet 0..200 chars>
+          - <url> | <title> | <snippet 0..200 chars>
+        ...
+
+    For tavily_extract / web_extract calls (raw_content), shows the URL
+    plus the first ~600 chars of raw_content. Truncates the whole block
+    at max_chars; appends "…(truncated)" marker.
+    """
+    def _get(tc, k, default=None):
+        if hasattr(tc, k):
+            return getattr(tc, k, default)
+        if isinstance(tc, dict):
+            return tc.get(k, default)
+        return default
+
+    lines: list[str] = []
+    for tc in tool_calls:
+        tool = _get(tc, "tool") or "?"
+        tcid = _get(tc, "tool_call_id") or "?"
+        inp = _get(tc, "input") or {}
+        out = _get(tc, "output") or {}
+
+        # One-line input summary.
+        inp_str = ""
+        if isinstance(inp, dict):
+            if "query" in inp:
+                q = inp.get("query") or ""
+                inp_str = f"q={str(q)[:80]!r}"
+            elif "urls" in inp:
+                urls = inp.get("urls") or []
+                inp_str = f"urls={len(urls)}"
+            else:
+                inp_str = ", ".join(
+                    f"{k}={str(v)[:40]}"
+                    for k, v in inp.items()
+                    if k not in ("include_domains", "exclude_domains", "include_images")
+                )[:120]
+        lines.append(f"[{tcid}] {tool}({inp_str})")
+
+        # Render output: search results, then extract raw_content fallback.
+        if isinstance(out, dict):
+            results = out.get("results") or []
+            search_rendered = False
+            for r in results[:5]:
+                if not isinstance(r, dict):
+                    continue
+                url = r.get("url") or "?"
+                title = r.get("title") or ""
+                snip = r.get("content") or ""
+                raw = r.get("raw_content") or ""
+                if snip or title:
+                    lines.append(f"  - {url} | {str(title)[:80]} | {str(snip)[:200]}")
+                    search_rendered = True
+                elif raw:
+                    # web_extract-style: URL + first ~600 chars of raw_content.
+                    lines.append(f"  - {url} | raw: {str(raw)[:600]}")
+                    search_rendered = True
+            if not search_rendered:
+                # Generic fallback for outputs without a results[] structure
+                # (e.g. apify_*, maigret). Compact JSON-ish dump.
+                lines.append(f"  (output: {str(out)[:300]})")
+
+    out_str = "\n".join(lines)
+    if len(out_str) > max_chars:
+        out_str = out_str[:max_chars] + "\n…(truncated)"
+    return out_str
 
 
 def format_leads_log_compact(leads_log: list, max_chars: int = 2000) -> str:

@@ -43,6 +43,7 @@ async def test_synthesize_passes_findings_to_llm_and_returns_parsed_report():
     parsed = await synthesize(
         subject="Jane",
         findings=[_f("Jane is a SWE", tags=["career"])],
+        tool_calls=[],
         llm=fake,
         cost_cb=MagicMock(),
     )
@@ -57,7 +58,9 @@ async def test_synthesize_handles_empty_findings():
         AIMessage(content="Nothing found.\n\n```json\n{\"extracted_identifiers\": {}}\n```",
                   tool_calls=[])
     ])
-    parsed = await synthesize(subject="Jane", findings=[], llm=fake, cost_cb=MagicMock())
+    parsed = await synthesize(
+        subject="Jane", findings=[], tool_calls=[], llm=fake, cost_cb=MagicMock(),
+    )
     assert parsed["extracted_identifiers"] == {}
     assert "Nothing found" in parsed["report"]["text"]
 
@@ -70,5 +73,54 @@ async def test_synthesize_falls_back_when_llm_returns_empty_content():
         AIMessage(content="", tool_calls=[]),     # first attempt: empty
         AIMessage(content=REPORT_TEXT, tool_calls=[]),  # retry: real
     ])
-    parsed = await synthesize(subject="Jane", findings=[_f("X")], llm=fake, cost_cb=MagicMock())
+    parsed = await synthesize(
+        subject="Jane", findings=[_f("X")], tool_calls=[], llm=fake, cost_cb=MagicMock(),
+    )
     assert "Executive Summary" in parsed["report"]["text"]
+
+
+async def test_synthesize_promotes_raw_snippet_handle_when_findings_miss_it():
+    """Regression for the Zhihu inline-handle leak: the processor judged
+    a snippet as identity-mismatch and recorded no finding for it, but
+    the snippet contained `xhs/twitter:semona0x`. The synthesizer reads
+    the raw tool_calls block and surfaces the handle in the final report.
+
+    We don't run a real LLM — we hand-craft an AIMessage that quotes the
+    snippet, then verify it lands in the parsed report. This pins the
+    plumbing (tool_calls reaches the prompt + the parser surfaces it),
+    not real LLM behavior."""
+    # Canned tool_call: a tavily_search result with the inline reveal.
+    canned_tool_call = {
+        "tool": "tavily_search",
+        "tool_call_id": "tc-zhihu",
+        "input": {"query": "Simon Wen NYU"},
+        "output": {
+            "results": [
+                {
+                    "url": "https://www.zhihu.com/people/simonwen",
+                    "title": "Simon Wen — Zhihu",
+                    "content": "Simon Wen. 纽约｜05｜大一xhs/twitter:Semona0x",
+                },
+            ],
+        },
+    }
+    promoted_report = (
+        "**Executive Summary**\n\nSubject identified.\n\n"
+        "**Digital & Social Media Footprint**\n"
+        "- Twitter / xhs handle: `Semona0x` (medium confidence) — inline "
+        "reveal in Zhihu snippet, source [tc-zhihu]: "
+        "\"Simon Wen. 纽约｜05｜大一xhs/twitter:Semona0x\".\n\n"
+        "```json\n{\"extracted_identifiers\": {\"usernames\": [\"Semona0x\"]}}\n```"
+    )
+    fake = BindableFake(responses=[AIMessage(content=promoted_report, tool_calls=[])])
+    parsed = await synthesize(
+        subject="Simon Wen",
+        findings=[],          # processor missed it: no finding recorded
+        tool_calls=[canned_tool_call],
+        llm=fake,
+        cost_cb=MagicMock(),
+    )
+    # The handle promoted from raw snippet must reach the report text...
+    assert "Semona0x" in parsed["report"]["text"]
+    # ...and the extracted-identifiers tail JSON.
+    assert parsed["extracted_identifiers"] == {"usernames": ["Semona0x"]}

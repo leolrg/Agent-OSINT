@@ -110,6 +110,7 @@ class LeadQueueV2Runner:
         # "(no report was produced)" markdown despite 11 findings on smoke.
         parsed = await synthesize(
             subject=subject, findings=state.findings,
+            tool_calls=state.tool_calls,
             llm=llm, cost_cb=cost_cb,
         )
         state.record_final_report(
@@ -138,6 +139,7 @@ class LeadQueueV2Runner:
                 )
                 parsed = await synthesize(
                     subject=subject, findings=state.findings,
+                    tool_calls=state.tool_calls,
                     llm=llm, cost_cb=cost_cb,
                 )
                 state.record_final_report(
