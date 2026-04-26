@@ -16,6 +16,8 @@ def test_scanconfig_defaults():
     assert c.llm.api_key_env_var == "XAI_API_KEY"
     assert c.llm.pricing.input_per_mtok_usd == 2.0
     assert c.llm.pricing.output_per_mtok_usd == 6.0
+    assert c.agent_version == "react_v1"
+    assert c.max_verifier_iterations == 3
 
 
 def test_scanconfig_rejects_nonpositive_caps():

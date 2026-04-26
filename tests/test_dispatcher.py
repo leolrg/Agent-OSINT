@@ -36,7 +36,6 @@ async def test_dispatcher_routes_to_react_v1(tmp_path, monkeypatch):
     fake_runner_instance.run.assert_awaited_once()
 
 
-@pytest.mark.skip(reason="enabled by Task B1: ScanConfig.agent_version")
 async def test_dispatcher_rejects_unknown_agent_version(tmp_path):
     from osint.errors import ScanConfigError
     cfg = ScanConfig(enabled_tools={"web_search"}, agent_version="does_not_exist")

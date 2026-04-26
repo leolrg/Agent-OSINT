@@ -42,6 +42,17 @@ class ScanConfig(BaseModel):
     # to the WHOLE scan (not per-pass) so the cap is honoured no matter
     # how many passes are configured.
     passes: PositiveInt = 1
+    # Which agent implementation to dispatch to. `react_v1` is the original
+    # single-agent ReAct loop; `leadqueue_v2` is the lead-queue-driven
+    # planner/verifier pipeline introduced for v2. Validated at dispatch
+    # time against the AGENTS registry (see osint/run.py); kept as a plain
+    # `str` so the dispatcher raises a ScanConfigError with a useful
+    # message (listing known versions) rather than a pydantic
+    # ValidationError on construction.
+    agent_version: str = "react_v1"
+    # Cap on verifier passes per lead in `leadqueue_v2`. Ignored by
+    # `react_v1`. Prevents runaway loops when a lead never converges.
+    max_verifier_iterations: PositiveInt = 3
 
 
 class ToolCallRecord(BaseModel):
