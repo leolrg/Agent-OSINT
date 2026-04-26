@@ -133,3 +133,48 @@ async def test_write_scan_markdown_handles_no_report_no_calls(tmp_path: Path):
     assert "**Status:** failed" in md
     assert "_(no report was produced)_" in md
     assert "_(no tool calls were made)_" in md
+
+
+async def test_write_scan_json_includes_messages(tmp_path: Path):
+    """The full LangGraph message history lands in the JSON file."""
+    state = ScanState(scan_id="msg1", subject="Jane", config=ScanConfig())
+    state.messages = [
+        {"type": "system", "content": "you are an OSINT agent"},
+        {"type": "human", "content": "Begin the scan."},
+        {"type": "ai", "content": "thinking...", "tool_calls": [{"id": "c1", "name": "tavily_search", "args": {"q": "Jane"}}]},
+        {"type": "tool", "content": '{"results":[]}', "tool_call_id": "c1"},
+        {"type": "ai", "content": "**Executive Summary** ..."},
+    ]
+    state.record_final_report({"text": "..."})
+    path = await write_scan_json(tmp_path, state, status="done")
+    data = json.loads(path.read_text())
+    assert "messages" in data
+    assert len(data["messages"]) == 5
+    assert data["messages"][0]["type"] == "system"
+    assert data["messages"][2]["tool_calls"][0]["name"] == "tavily_search"
+    assert data["messages"][3]["tool_call_id"] == "c1"
+
+
+async def test_write_scan_markdown_renders_message_log_summary(tmp_path: Path):
+    """The .md gets a one-line summary of message-type counts (full
+    transcript stays in the JSON to avoid bloating the markdown)."""
+    state = ScanState(scan_id="msg2", subject="Jane", config=ScanConfig())
+    state.messages = [
+        {"type": "system", "content": "..."},
+        {"type": "human", "content": "Begin."},
+        {"type": "ai", "content": "..."},
+        {"type": "tool", "content": "..."},
+        {"type": "ai", "content": "..."},
+    ]
+    state.record_final_report({"text": "report"})
+    path = await write_scan_markdown(tmp_path, state, status="done")
+    md = path.read_text(encoding="utf-8")
+    assert "## Message Log Summary" in md
+    assert "5 messages" in md
+    # All four type counts present
+    assert "2 ai" in md
+    assert "1 human" in md
+    assert "1 system" in md
+    assert "1 tool" in md
+    # Should NOT dump the full transcript into the .md (we said it's a summary)
+    assert "Begin." not in md

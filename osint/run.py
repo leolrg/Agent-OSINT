@@ -75,14 +75,20 @@ async def _synthesize(
     state: ScanState,
     stop_reason: str,
     cost_cb: LLMCostCallback,
-) -> str:
+) -> tuple[str, list[Any]]:
+    """Run the cap-cut synthesis fallback.
+
+    Returns (text, [system_message, human_message, response_message]) so
+    the caller can append the synthesis exchange to the scan's full
+    message history alongside the agent-loop messages.
+    """
     summary = format_tool_calls_for_synthesis(state.tool_calls)
     msgs = [
         SystemMessage(content=build_system_prompt(subject, sorted(state.config.enabled_tools))),
         HumanMessage(content=build_synthesis_prompt(stop_reason, summary)),
     ]
     result = await llm.ainvoke(msgs, config={"callbacks": [cost_cb]})
-    return result.content or ""
+    return result.content or "", [*msgs, result]
 
 
 def _extract_final_text(agent_result: dict) -> str:
@@ -92,6 +98,24 @@ def _extract_final_text(agent_result: dict) -> str:
         if isinstance(m, AIMessage):
             return m.content or ""
     return ""
+
+
+def _serialize_messages(messages: list) -> list[dict]:
+    """Convert a list of LangChain BaseMessages into JSON-clean dicts.
+
+    Uses Pydantic's `model_dump(mode="json")` so timestamps, enum types,
+    and nested LangChain objects (like tool_calls on AIMessage) all
+    serialize correctly into the scan JSON. Falls back to a stringified
+    `repr` only if the object isn't a Pydantic model — defensive against
+    a future LangChain refactor.
+    """
+    out: list[dict] = []
+    for m in messages or []:
+        try:
+            out.append(m.model_dump(mode="json"))
+        except Exception:
+            out.append({"type": type(m).__name__, "repr": repr(m)})
+    return out
 
 
 async def scan(
@@ -143,6 +167,15 @@ async def scan(
         except GraphRecursionError:
             stop_reason = StopReason.MAX_CALLS
 
+        # Capture the full LangGraph message history (system / human / AI /
+        # tool messages, including AIMessage.tool_calls and ToolMessage
+        # contents) for the audit log. Available even when ainvoke errored
+        # is partial; agent_result is None only if we never made it past
+        # the first superstep, in which case there's nothing to capture
+        # from the agent loop.
+        if agent_result is not None:
+            state.messages = _serialize_messages(agent_result.get("messages", []))
+
         if stop_reason is None and agent_result is not None:
             final_text = _extract_final_text(agent_result)
             parsed = parse_report(final_text)
@@ -150,9 +183,13 @@ async def scan(
         else:
             logger.info("scan.synthesize", scan_id=state.scan_id,
                         stop_reason=stop_reason.value if stop_reason else "unknown")
-            synth_text = await _synthesize(
+            synth_text, synth_msgs = await _synthesize(
                 llm, subject, state, stop_reason.value if stop_reason else "unknown", cost_cb,
             )
+            # Append the synthesis exchange to the message history so the
+            # audit log shows both the truncated agent loop AND the
+            # synthesis prompt + response that produced the final report.
+            state.messages.extend(_serialize_messages(synth_msgs))
             parsed = parse_report(synth_text)
             state.record_final_report(parsed["report"], identifiers=parsed["extracted_identifiers"])
 

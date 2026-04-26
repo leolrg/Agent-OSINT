@@ -55,6 +55,32 @@ async def test_scan_happy_path_no_tool_calls(tmp_path):
     assert result.path.exists()
 
 
+async def test_scan_captures_full_message_history(tmp_path):
+    """The agent loop's message list (system + human seed + AI replies)
+    lands in the scan JSON's `messages` field after a successful run."""
+    import json
+    fake = BindableFakeModel(responses=[_ai_final(FINAL_JSON)])
+    await scan(
+        subject="Jane",
+        config=ScanConfig(enabled_tools={"tavily_search"}),
+        llm=fake,
+        scans_dir=tmp_path,
+    )
+    # Find the JSON file (only one was written).
+    json_files = list(tmp_path.glob("*.json"))
+    assert len(json_files) == 1
+    data = json.loads(json_files[0].read_text())
+
+    msgs = data["messages"]
+    # At minimum: the seed HumanMessage and the AIMessage with the final JSON.
+    types = [m["type"] for m in msgs]
+    assert "human" in types
+    assert "ai" in types
+    # The AI's content should include the final-report fenced JSON block.
+    ai_msgs = [m for m in msgs if m["type"] == "ai"]
+    assert any("extracted_identifiers" in (m.get("content") or "") for m in ai_msgs)
+
+
 async def test_scan_writes_failed_json_on_unexpected_error(tmp_path, monkeypatch):
     import osint.run as run_module
     monkeypatch.setattr(run_module, "create_react_agent",

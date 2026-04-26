@@ -25,6 +25,12 @@ class ScanState:
     extracted_identifiers: dict[str, Any] = field(default_factory=dict)
     llm_input_tokens: int = 0
     llm_output_tokens: int = 0
+    # Full LangGraph message history captured after the agent loop ends.
+    # Each entry is a serialized BaseMessage dict (see _serialize_messages
+    # in osint/run.py): SystemMessage, HumanMessage, AIMessage (with
+    # tool_calls), and ToolMessage. Includes the synthesis exchange too
+    # when a cap-cut triggered the synthesis fallback.
+    messages: list[dict[str, Any]] = field(default_factory=list)
     _has_report: bool = False
 
     @property

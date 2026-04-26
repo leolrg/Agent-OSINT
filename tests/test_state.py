@@ -69,6 +69,16 @@ def test_record_llm_usage_accumulates():
     assert s.llm_output_tokens == 1_250
 
 
+def test_messages_default_empty_and_appendable():
+    """messages list defaults to [] and accepts the serialized BaseMessage
+    dicts that osint.run._serialize_messages produces."""
+    s = ScanState(scan_id="x", subject="S", config=ScanConfig())
+    assert s.messages == []
+    s.messages.append({"type": "system", "content": "you are an OSINT agent"})
+    s.messages.append({"type": "human", "content": "Begin the scan."})
+    assert [m["type"] for m in s.messages] == ["system", "human"]
+
+
 def test_final_report_tracking():
     s = ScanState(scan_id="x", subject="S", config=ScanConfig())
     assert s.has_final_report() is False

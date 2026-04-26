@@ -29,6 +29,7 @@ async def write_scan_json(
         "extracted_identifiers": state.extracted_identifiers,
         "config": state.config.model_dump(mode="json"),
         "tool_calls": [tc.model_dump(mode="json") for tc in state.tool_calls],
+        "messages": state.messages,
         "report": state.report,
         "tool_cost_usd": state.tool_cost_usd,
         "llm_cost_usd": state.llm_cost_usd,
@@ -105,6 +106,23 @@ async def write_scan_markdown(
             json.dumps(state.extracted_identifiers, indent=2, default=str, ensure_ascii=False)
         )
         parts.append("```")
+
+    # ── Message-history summary ────────────────────────────────────────────
+    if state.messages:
+        from collections import Counter
+        type_counts = Counter(m.get("type", "?") for m in state.messages)
+        parts.append("")
+        parts.append("---")
+        parts.append("")
+        parts.append("## Message Log Summary")
+        parts.append("")
+        parts.append(
+            f"Captured **{len(state.messages)} messages** during the scan: "
+            + ", ".join(f"{n} {t}" for t, n in sorted(type_counts.items()))
+            + ". Full per-message contents (system prompt, every AI turn with "
+            "reasoning + tool_calls, each ToolMessage payload) are in the "
+            "JSON file's `messages` field."
+        )
 
     # ── Tool-call log ──────────────────────────────────────────────────────
     parts.append("")
