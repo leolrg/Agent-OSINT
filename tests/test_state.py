@@ -85,3 +85,14 @@ def test_final_report_tracking():
     s.record_final_report({"summary": "hi"}, identifiers={"emails": []})
     assert s.has_final_report() is True
     assert s.report == {"summary": "hi"}
+
+
+def test_scanstate_v2_fields_default_empty():
+    """v2-only fields default to empty containers so v1 scans serialize
+    unchanged shape (the fields are present but empty)."""
+    from osint.state import ScanState
+    from osint.types import ScanConfig
+    s = ScanState(scan_id="x", subject="Jane", config=ScanConfig())
+    assert s.findings == []
+    assert s.leads_log == []
+    assert s.verifier_iterations == 0

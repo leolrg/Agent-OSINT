@@ -39,6 +39,13 @@ class ScanState:
     # final answer); state.extracted_identifiers is the union-merge.
     # pass_reports is the audit trail of how the report evolved.
     pass_reports: list[dict[str, Any]] = field(default_factory=list)
+    # v2 lead-queue fields (unused by v1; serialize as empty defaults).
+    # Left untyped (`list`) at the dataclass level to avoid importing
+    # osint.agents.leadqueue_v2.queue here, which would create a circular
+    # import in the v2 runner direction. Type-narrow at the v2 use site.
+    findings: list = field(default_factory=list)        # list[Finding]
+    leads_log: list = field(default_factory=list)       # list[Lead]
+    verifier_iterations: int = 0
     _has_report: bool = False
 
     @property
