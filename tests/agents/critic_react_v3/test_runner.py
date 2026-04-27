@@ -155,3 +155,34 @@ async def test_runner_empty_final_falls_through_to_cap_cut_synthesis():
     assert stop_reason == StopReason.EMPTY_FINAL
     assert "cap-cut" in parsed["report"]["text"]
     assert parsed["extracted_identifiers"]["employers"] == ["Acme"]
+
+
+DRAFT_WITH_PROSE_BEFORE_LEDGER = (
+    'Final answer below.\n\n'
+    '```json\n{"open": [], "answered": ["Q1"], "dropped": []}\n```\n\n'
+    '**Executive Summary**\n\nJane works at Acme.\n\n'
+    '```json\n{"extracted_identifiers": {"employers": ["Acme"]}}\n```'
+)
+
+
+async def test_runner_handles_prose_before_ledger_block():
+    """Defensive: model adds a prose line before the JSON ledger.
+
+    The leading-ledger strip must still find and remove the ledger so that
+    parse_report's first-block match is the trailing extracted_identifiers
+    envelope, not the ledger.
+    """
+    fake = BindableFake(responses=[
+        AIMessage(content=DRAFT_WITH_PROSE_BEFORE_LEDGER, tool_calls=[]),
+        AIMessage(content="VERDICT: ACCEPT\n"),
+    ])
+    state = ScanState(
+        scan_id="x", subject="Jane",
+        config=ScanConfig(agent_version="critic_react_v3"),
+    )
+    parsed, stop_reason = await CriticReactV3Runner().run(
+        subject="Jane", state=state, llm=fake, tools=[], cost_cb=MagicMock(),
+    )
+    assert stop_reason is None
+    assert parsed["extracted_identifiers"] == {"employers": ["Acme"]}
+    assert "Jane works at Acme" in parsed["report"]["text"]

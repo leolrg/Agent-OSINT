@@ -16,6 +16,7 @@ fall through to v1's _synthesize so the user always gets *some* report.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import re
 from typing import Any
 
@@ -40,15 +41,37 @@ def _extract_last_ai_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
-# Matches a leading fenced ```json``` block (with optional preceding whitespace).
-# v3 drafts begin with the open-question ledger; strip it before delegating to
-# v1's parse_report so the *trailing* extracted_identifiers block wins.
-_LEADING_FENCED_JSON = re.compile(r"\A\s*```json\s*\{.*?\}\s*```\s*", re.DOTALL)
+# v3 drafts contain TWO fenced JSON blocks:
+#   1. the open-question ledger (has key "open"), which the system prompt
+#      asks the model to put first
+#   2. the final identifiers envelope (has key "extracted_identifiers")
+# v1's parse_report uses re.search and matches the FIRST fenced block, so we
+# must strip the ledger before delegating. We do NOT anchor to start-of-string:
+# on critic-rejected re-engagements, the model occasionally prepends a header
+# line ("Final answer:" etc.) before the ledger. Instead we walk every fenced
+# block in the draft, parse it, and strip the first one whose parsed object
+# has an "open" key. That fingerprints the ledger regardless of position.
+_FENCED_JSON_ANY = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def _strip_leading_ledger(text: str) -> str:
-    """Remove the v3 ledger block at the head of the draft, if any."""
-    return _LEADING_FENCED_JSON.sub("", text, count=1)
+    """Strip the first fenced ```json``` block whose parsed JSON has an `open` key.
+
+    The "open" key is the ledger's signature; the trailing identifiers block
+    uses "extracted_identifiers" as its key, so it is unaffected. If no
+    ledger-shaped block is present (e.g. cap-cut synthesis output), returns
+    the input unchanged.
+    """
+    if not text:
+        return text
+    for m in _FENCED_JSON_ANY.finditer(text):
+        try:
+            data = _json.loads(m.group(1))
+        except _json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and "open" in data:
+            return text[: m.start()] + text[m.end():]
+    return text
 
 
 class CriticReactV3Runner:
