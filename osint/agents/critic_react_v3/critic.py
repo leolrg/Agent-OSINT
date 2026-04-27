@@ -88,7 +88,18 @@ GAPS:
 
 
 def _summarize_tool_calls(tool_calls: list[Any]) -> str:
-    """One-line histogram of tool-call counts by tool name. Empty when no calls."""
+    """One-line histogram of tool-call counts by tool name.
+
+    Operates on project ``ToolCallRecord`` instances (Pydantic model with a
+    ``.tool: str`` field, defined in ``osint/types.py``) — NOT LangChain
+    ``ToolCall`` TypedDicts (which use ``"name"``). The runner passes
+    ``state.tool_calls`` directly, which is ``list[ToolCallRecord]``.
+
+    A dict-style fallback (``tc.get("tool")``) is kept for defensive
+    handling of test fixtures and any future call-site that builds
+    plain dicts; falls through to ``"unknown"`` for any other shape.
+    Returns ``"(no tool calls were made)"`` for an empty list.
+    """
     if not tool_calls:
         return "(no tool calls were made)"
     counts: dict[str, int] = {}

@@ -106,3 +106,52 @@ async def test_critic_returns_reject_with_gaps():
     )
     assert v.accept is False
     assert v.gaps == ["No current role", "Email never probed"]
+
+
+from osint.agents.critic_react_v3.critic import _summarize_tool_calls
+from osint.types import ToolCallRecord
+from datetime import datetime, timezone
+
+
+def _toolcall_record(tool: str, turn: int = 1) -> ToolCallRecord:
+    """Minimal ToolCallRecord matching the runner's call-site shape."""
+    now = datetime.now(timezone.utc)
+    return ToolCallRecord(
+        turn=turn,
+        tool=tool,
+        input={},
+        output=None,
+        raw=None,
+        started_at=now,
+        completed_at=now,
+        cost_usd=0.0,
+    )
+
+
+def test_summarize_tool_calls_empty_returns_placeholder():
+    assert _summarize_tool_calls([]) == "(no tool calls were made)"
+
+
+def test_summarize_tool_calls_pydantic_records():
+    """Real call-site shape: list[ToolCallRecord] with .tool attribute."""
+    calls = [
+        _toolcall_record("web_search"),
+        _toolcall_record("web_search", turn=2),
+        _toolcall_record("apify_instagram", turn=3),
+    ]
+    summary = _summarize_tool_calls(calls)
+    assert summary == "apify_instagram=1, web_search=2"
+
+
+def test_summarize_tool_calls_dict_fallback():
+    """Dict-shaped entries are tolerated as a defensive fallback."""
+    calls = [{"tool": "web_search"}, {"tool": "web_search"}, {"tool": "maigret"}]
+    summary = _summarize_tool_calls(calls)
+    assert summary == "maigret=1, web_search=2"
+
+
+def test_summarize_tool_calls_unknown_when_neither():
+    """Items without a .tool attribute or 'tool' key fall through to 'unknown'."""
+    calls = [object(), object()]
+    summary = _summarize_tool_calls(calls)
+    assert summary == "unknown=2"
