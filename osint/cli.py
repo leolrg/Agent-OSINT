@@ -38,14 +38,39 @@ def _build_parser() -> argparse.ArgumentParser:
                         "you bump --passes you may also want a higher "
                         "--budget-usd / --max-calls. Default: 1.")
     s.add_argument(
+        "--preset",
+        choices=["coffee_career", "coffee_personal", "reconnect",
+                 "sales_outreach", "dossier", "general"],
+        default="general",
+        help="critic_react_v3 only: canned investigation posture. "
+             "Combined with --goal in the system prompt. Default: general.",
+    )
+    s.add_argument(
+        "--goal", type=str, default="",
+        help="critic_react_v3 only: free-form goal text appended after "
+             "the preset preamble in the system prompt.",
+    )
+    s.add_argument(
+        "--max-critic-rejections", type=int, default=None,
+        help="critic_react_v3 only: cap on critic rejection cycles "
+             "(default 3). The whole-scan budget still applies on top.",
+    )
+    s.add_argument(
+        "--max-recursion-per-engagement", type=int, default=None,
+        help="critic_react_v3 only: per-engagement LangGraph recursion "
+             "limit (default 50). Caps tool calls in one agent invocation.",
+    )
+    s.add_argument(
         "--agent",
-        choices=["react_v1", "leadqueue_v2", "xai_multiagent_v1"],
+        choices=["react_v1", "leadqueue_v2", "xai_multiagent_v1", "critic_react_v3"],
         default="react_v1",
         help="Agent runner. react_v1 = ReAct loop with multi-pass deepen "
              "(default; behaves like before this flag existed). "
              "leadqueue_v2 = priority-queue investigation with verifier loop. "
              "xai_multiagent_v1 = Grok 4.20 multi-agent via xAI Responses "
-             "with Apify LinkedIn/Instagram Remote MCP.",
+             "with Apify LinkedIn/Instagram Remote MCP. "
+             "critic_react_v3 = single ReAct + open-question ledger + "
+             "adversarial critic; supports --preset and --goal.",
     )
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
@@ -183,6 +208,12 @@ async def main(argv: list[str] | None = None) -> int:
         "passes": args.passes,
     }
     kwargs["agent_version"] = args.agent
+    kwargs["preset"] = args.preset
+    kwargs["goal"] = args.goal
+    if args.max_critic_rejections is not None:
+        kwargs["max_critic_rejections"] = args.max_critic_rejections
+    if args.max_recursion_per_engagement is not None:
+        kwargs["max_recursion_per_engagement"] = args.max_recursion_per_engagement
     if args.max_processor_tool_calls is not None:
         kwargs["max_processor_tool_calls"] = args.max_processor_tool_calls
     if args.max_verifier_iterations is not None:
