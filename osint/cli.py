@@ -21,6 +21,14 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--budget-usd", type=float, default=5.0)
     s.add_argument("--max-calls", type=int, default=100)
     s.add_argument("--max-seconds", type=int, default=600)
+    s.add_argument("--max-processor-tool-calls", type=int, default=None,
+                   help="leadqueue_v2 only: per-lead tool-call ceiling for "
+                        "the processor's mini-ReAct loop (default 5). Higher "
+                        "values let each lead pivot deeper before synthesis. "
+                        "The whole-scan --max-calls cap still applies on top.")
+    s.add_argument("--max-verifier-iterations", type=int, default=None,
+                   help="leadqueue_v2 only: cap on verifier→re-investigate "
+                        "cycles after the first synthesis (default 3).")
     s.add_argument("--passes", type=int, default=1,
                    help="Number of agent passes per scan. Pass 1 is the "
                         "initial investigation; passes 2..N are 'deepen' "
@@ -175,6 +183,10 @@ async def main(argv: list[str] | None = None) -> int:
         "passes": args.passes,
     }
     kwargs["agent_version"] = args.agent
+    if args.max_processor_tool_calls is not None:
+        kwargs["max_processor_tool_calls"] = args.max_processor_tool_calls
+    if args.max_verifier_iterations is not None:
+        kwargs["max_verifier_iterations"] = args.max_verifier_iterations
     if args.enable:
         kwargs["enabled_tools"] = set(args.enable)
     llm_cfg = _resolve_llm_config(args)

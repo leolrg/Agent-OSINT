@@ -50,6 +50,7 @@ async def _drain_queue(
     llm: BaseChatModel,
     tools: list[Any],
     cost_cb: Any,
+    max_processor_tool_calls: int,
 ) -> None:
     """Pop and process leads until queue is empty or scan should stop.
 
@@ -70,6 +71,7 @@ async def _drain_queue(
             llm=llm,
             tools=tools,
             cost_cb=cost_cb,
+            max_processor_tool_calls=max_processor_tool_calls,
         )
         state.findings.extend(findings)
         state.leads_log.append(lead)
@@ -97,6 +99,7 @@ class LeadQueueV2Runner:
         await _drain_queue(
             queue=queue, subject=subject, state=state,
             llm=llm, tools=tools, cost_cb=cost_cb,
+            max_processor_tool_calls=config.max_processor_tool_calls,
         )
 
         # Stop reason check before we spend on synth+verify
@@ -136,6 +139,7 @@ class LeadQueueV2Runner:
                 await _drain_queue(
                     queue=queue, subject=subject, state=state,
                     llm=llm, tools=tools, cost_cb=cost_cb,
+                    max_processor_tool_calls=config.max_processor_tool_calls,
                 )
                 parsed = await synthesize(
                     subject=subject, findings=state.findings,

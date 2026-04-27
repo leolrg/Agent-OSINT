@@ -53,6 +53,12 @@ class ScanConfig(BaseModel):
     # Cap on verifier passes per lead in `leadqueue_v2`. Ignored by
     # `react_v1`. Prevents runaway loops when a lead never converges.
     max_verifier_iterations: PositiveInt = 3
+    # Per-lead tool-call ceiling for the leadqueue_v2 processor's mini-ReAct
+    # loop. Higher → each lead can pivot deeper before the synthesizer runs;
+    # lower → tighter cost per lead but shallower investigation. Ignored by
+    # `react_v1` and `xai_multiagent_v1`. The whole-scan `max_tool_calls`
+    # still applies — this is a per-lead inner cap, not a global one.
+    max_processor_tool_calls: PositiveInt = 5
 
 
 class ToolCallRecord(BaseModel):
