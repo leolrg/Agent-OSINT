@@ -1,6 +1,6 @@
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, NonNegativeFloat, PositiveFloat, PositiveInt
 
@@ -59,6 +59,23 @@ class ScanConfig(BaseModel):
     # `react_v1` and `xai_multiagent_v1`. The whole-scan `max_tool_calls`
     # still applies — this is a per-lead inner cap, not a global one.
     max_processor_tool_calls: PositiveInt = 5
+    # Free-form goal text and named preset for critic_react_v3. Both are
+    # honored; the preset preamble and the goal are concatenated into the
+    # system prompt in that order. Ignored by react_v1 / leadqueue_v2 /
+    # xai_multiagent_v1.
+    goal: str = ""
+    preset: Literal[
+        "coffee_career",
+        "coffee_personal",
+        "reconnect",
+        "sales_outreach",
+        "dossier",
+        "general",
+    ] = "general"
+    # critic_react_v3 only: cap on critic rejection rounds and per-engagement
+    # LangGraph recursion limit.
+    max_critic_rejections: PositiveInt = 3
+    max_recursion_per_engagement: PositiveInt = 50
 
 
 class ToolCallRecord(BaseModel):

@@ -58,6 +58,10 @@ def test_scanconfig_overrides_other_fields():
 
 from datetime import datetime
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
 from osint.types import ToolCallRecord, ScanResult
 
 
@@ -81,3 +85,21 @@ def test_scanresult_fields():
     )
     assert s.subject == "Jane Doe"
     assert s.path.name == "s1.json"
+
+
+def test_scan_config_defaults_for_critic_react_v3_fields():
+    c = ScanConfig()
+    assert c.goal == ""
+    assert c.preset == "general"
+    assert c.max_critic_rejections == 3
+    assert c.max_recursion_per_engagement == 50
+
+
+def test_scan_config_preset_must_be_known():
+    with pytest.raises(ValidationError):
+        ScanConfig(preset="not_a_real_preset")  # type: ignore[arg-type]
+
+
+def test_scan_config_goal_accepts_free_form_string():
+    c = ScanConfig(goal="coffee chat about ML infra")
+    assert c.goal == "coffee chat about ML infra"
