@@ -2,7 +2,7 @@
 
 ## Agents
 
-The scanner has two agent versions, selectable via `--agent`:
+The scanner has four agent versions, selectable via `--agent`:
 
 - **`react_v1`** (default) — single ReAct loop with multi-pass deepen. Fast (~3-10 min), modest cost (~$0.30-0.70 per scan). Good for quick lookups.
 - **`leadqueue_v2`** — priority-queue investigation with verifier loop. Slow (~30-60 min), higher cost (~$0.30-0.50 per scan in practice). Designed for deep-dive scans where v1 returns shallow profiles.
