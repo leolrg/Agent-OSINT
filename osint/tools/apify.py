@@ -50,6 +50,7 @@ DEFAULT_WEB_CRAWLER_ACTOR = "apify~website-content-crawler"
 DEFAULT_IG_ACTOR = "apify~instagram-scraper"
 DEFAULT_LI_ACTOR = "dev_fusion~linkedin-profile-scraper"
 DEFAULT_TW_ACTOR = "gentle_cloud~twitter-tweets-scraper"
+DEFAULT_RED_SEARCH_ACTOR = "easyapi~rednote-xiaohongshu-search-scraper"
 
 
 # Per-actor wall-clock cap (seconds) passed to actor.call(timeout_secs=...).
@@ -75,6 +76,13 @@ _ACTOR_TIMEOUT_SECS: dict[str, int] = {
     # retry indefinitely inside its 1-hour cap. Bound it tightly so the
     # agent isn't blocked on Twitter for 60 min when the pool is dry.
     DEFAULT_TW_ACTOR: 120,
+    # Xiaohongshu (Rednote) search uses Puppeteer against the real site
+    # and is sensitive to non-CN IPs (the page never reveals the result
+    # selector and the actor sits on `Waiting for selector div.filter`
+    # until killed). Cap at 4 min — long enough for a happy-path render
+    # via the actor's Apify proxy, short enough that a stuck render
+    # doesn't burn the scan's wall-clock.
+    DEFAULT_RED_SEARCH_ACTOR: 240,
 }
 
 
@@ -440,6 +448,123 @@ class ApifyLinkedInTool(BaseTool):
         result = await _run_actor(self.client, self.actor_id, run_input)
         content = json.dumps({"profile_url": profile_url, "items": result["items"]}, default=str)
         return content, result
+
+
+# ---------------------------------------------------------------------------
+# Xiaohongshu (Rednote) search
+# ---------------------------------------------------------------------------
+
+
+class ApifyXiaohongshuInput(BaseModel):
+    query: str = Field(description="Xiaohongshu (RedNote) search keyword.")
+    max_items: int = Field(
+        default=100, ge=100, le=10000,
+        description=(
+            "Number of results to fetch. Actor minimum is 100 — even a "
+            "narrower request rounds up. ~$0.50 per call at 100 results."
+        ),
+    )
+    sort_type: str = Field(
+        default="general",
+        description=(
+            "Sort order. 'general' (default — relevance), "
+            "'popularity_descending', or 'time_descending'."
+        ),
+    )
+    note_type: str = Field(
+        default="all",
+        description="Filter by note type: 'all', 'video', or 'normal' (image+text).",
+    )
+
+
+_RED_DESCRIPTION = (
+    "Search Xiaohongshu (小红书 / RedNote) — China's lifestyle / discovery "
+    "social platform. Use for any subject with plausible Xiaohongshu "
+    "presence: Chinese-context students, travel/fashion/wellness/food "
+    "interests, ENS/Web3 users sometimes cross-post here. Tavily/Google "
+    "do NOT index Xiaohongshu reliably; this actor scrapes the live "
+    "site.\n\n"
+    "Returns per result: post URL, title, author nickname + Xiaohongshu "
+    "user_id (the durable handle), like count, image URLs, and the "
+    "raw note_card payload for follow-up context.\n\n"
+    "Args:\n"
+    "  query: search keyword (single string). Use Chinese characters "
+    "or pinyin; latin spellings of CN names rarely match.\n"
+    "  max_items: 100-10000, default 100 (actor minimum). $4.99 / 1000 "
+    "results = ~$0.50 per default call.\n"
+    "  sort_type: 'general' | 'popularity_descending' | 'time_descending'.\n"
+    "  note_type: 'all' | 'video' | 'normal'.\n\n"
+    "Caveats:\n"
+    "- The actor uses Puppeteer against the real site and may TIME-OUT "
+    "if Xiaohongshu serves a captcha or blocks the proxy IP. Per-actor "
+    "timeout caps wasted budget at ~4 min.\n"
+    "- An author's user_id from this tool is a STRONG identifier — "
+    "Xiaohongshu IDs don't recycle and unlock the user's full profile "
+    "via xiaohongshu.com/user/profile/<user_id>."
+)
+
+
+class ApifyXiaohongshuTool(BaseTool):
+    name: str = "apify_xiaohongshu"
+    description: str = _RED_DESCRIPTION
+    args_schema: Type[BaseModel] = ApifyXiaohongshuInput
+    response_format: str = "content_and_artifact"
+
+    actor_id: str = DEFAULT_RED_SEARCH_ACTOR
+    _client: ApifyClientAsync | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        client: ApifyClientAsync | None = None,
+        actor_id: str = DEFAULT_RED_SEARCH_ACTOR,
+        **kwargs: Any,
+    ):
+        super().__init__(actor_id=actor_id, **kwargs)
+        self._client = client
+
+    @property
+    def client(self) -> ApifyClientAsync:
+        if self._client is None:
+            self._client = _build_client()
+        return self._client
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Use async invocation.")
+
+    async def _arun(
+        self,
+        query: str,
+        max_items: int = 100,
+        sort_type: str = "general",
+        note_type: str = "all",
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict]:
+        run_input = {
+            "keywords": [query],
+            "maxItems": max_items,
+            "sortType": sort_type,
+            "noteType": note_type,
+        }
+        result = await _run_actor(self.client, self.actor_id, run_input)
+        # Flatten dataset items into a uniform shape so the agent sees
+        # url/title/author/user_id/likes inline (matching how web_search
+        # surfaces ranked results — synthesizer-friendly).
+        flat: list[dict] = []
+        for it in result["items"]:
+            note = (it.get("item") or {}).get("note_card") or {}
+            user = note.get("user") or {}
+            flat.append({
+                "url": it.get("link"),
+                "title": note.get("display_title"),
+                "author_nickname": user.get("nickname"),
+                "author_user_id": user.get("user_id"),
+                "liked_count": (note.get("interact_info") or {}).get("liked_count"),
+                "scraped_at": it.get("scrapedAt"),
+            })
+        artifact = {"query": query, "results": flat, "raw": result["raw"]}
+        content = json.dumps({"query": query, "results": flat}, default=str, ensure_ascii=False)
+        return content, artifact
 
 
 # ---------------------------------------------------------------------------

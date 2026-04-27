@@ -9,6 +9,7 @@ from osint.tools.apify import (
     ApifyInstagramTool,
     ApifyLinkedInTool,
     ApifyTwitterTool,
+    ApifyXiaohongshuTool,
     WebExtractTool,
     WebSearchTool,
 )
@@ -44,6 +45,11 @@ _COSTS = {
     # so the agent treats placeholder data as real. Verified 2026-04-26
     # against real @semona0x lookups.
     "apify_twitter": 0.04,
+    # easyapi/rednote-xiaohongshu-search-scraper: $4.99 per 1000 results.
+    # The actor's minimum maxItems is 100 (it rounds up smaller requests),
+    # so the cheapest possible call is $0.499 — round up to $0.50. Bigger
+    # requests scale linearly; cap at 100 by default in the tool args.
+    "apify_xiaohongshu": 0.50,
 }
 
 
@@ -71,6 +77,9 @@ def _make_raw_tool(name: str, config: ScanConfig) -> BaseTool:
     if name == "apify_twitter":
         _require_env("APIFY_TOKEN", name)
         return ApifyTwitterTool()
+    if name == "apify_xiaohongshu":
+        _require_env("APIFY_TOKEN", name)
+        return ApifyXiaohongshuTool()
     raise ScanConfigError(f"unknown tool: {name}")
 
 

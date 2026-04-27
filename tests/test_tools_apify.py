@@ -5,6 +5,7 @@ from osint.tools.apify import (
     ApifyInstagramTool,
     ApifyLinkedInTool,
     ApifyTwitterTool,
+    ApifyXiaohongshuTool,
 )
 
 
@@ -107,6 +108,7 @@ async def test_actors_have_per_actor_timeouts():
         DEFAULT_GOOGLE_SEARCH_ACTOR,
         DEFAULT_IG_ACTOR,
         DEFAULT_LI_ACTOR,
+        DEFAULT_RED_SEARCH_ACTOR,
         DEFAULT_TW_ACTOR,
         DEFAULT_WEB_CRAWLER_ACTOR,
     )
@@ -117,6 +119,7 @@ async def test_actors_have_per_actor_timeouts():
         DEFAULT_IG_ACTOR,
         DEFAULT_LI_ACTOR,
         DEFAULT_TW_ACTOR,
+        DEFAULT_RED_SEARCH_ACTOR,
     ):
         assert actor in _ACTOR_TIMEOUT_SECS, f"{actor} missing from _ACTOR_TIMEOUT_SECS"
     # Twitter must be tightly bounded — that's the whole point of this gate.
@@ -140,14 +143,72 @@ async def test_actors_have_per_actor_timeouts():
         )
 
 
+async def test_apify_xiaohongshu_runs_actor_with_correct_input_shape():
+    """Rednote actor takes `keywords: [str]` (NOT `keyword`/`query`),
+    `maxItems` >= 100 (actor's own minimum — anything below causes a 400),
+    plus `sortType` and `noteType`. The tool flattens each result into a
+    uniform {url, title, author_nickname, author_user_id, liked_count}
+    shape so the synthesizer sees inline-mining-friendly snippets, same
+    way web_search results are rendered."""
+    raw_item = {
+        "keyword": "温行健",
+        "link": "https://www.xiaohongshu.com/explore/abc123",
+        "scrapedAt": "2026-04-27T08:00:00Z",
+        "item": {
+            "id": "abc123",
+            "model_type": "note",
+            "note_card": {
+                "display_title": "Hi from gz",
+                "user": {
+                    "nickname": "Simon",
+                    "user_id": "5d34abcdef",
+                    "avatar": "https://...",
+                },
+                "interact_info": {"liked_count": "42"},
+                "image_list": [],
+                "cover": {},
+            },
+        },
+    }
+    client, actor, _ = _fake_client([raw_item])
+    tool = ApifyXiaohongshuTool(client=client, actor_id="easyapi~rednote-xiaohongshu-search-scraper")
+    content, artifact = await tool._arun(query="温行健", max_items=100)
+    # Verify the input shape the actor demands.
+    run_input = actor.call.call_args.kwargs["run_input"]
+    assert run_input["keywords"] == ["温行健"]
+    assert run_input["maxItems"] == 100
+    assert run_input["sortType"] == "general"
+    assert run_input["noteType"] == "all"
+    # Verify the flattened output the agent will see.
+    assert len(artifact["results"]) == 1
+    flat = artifact["results"][0]
+    assert flat["url"] == "https://www.xiaohongshu.com/explore/abc123"
+    assert flat["title"] == "Hi from gz"
+    assert flat["author_nickname"] == "Simon"
+    assert flat["author_user_id"] == "5d34abcdef"
+    assert flat["liked_count"] == "42"
+
+
+async def test_apify_xiaohongshu_rejects_below_minimum_max_items():
+    """The actor's input schema requires maxItems >= 100. Pydantic must
+    enforce this at args-parse time so the agent doesn't hit a runtime
+    400 mid-investigation."""
+    from pydantic import ValidationError
+    from osint.tools.apify import ApifyXiaohongshuInput
+    with pytest.raises(ValidationError):
+        ApifyXiaohongshuInput(query="x", max_items=20)
+
+
 async def test_apify_metadata():
     ig = ApifyInstagramTool(client=MagicMock(), actor_id="x")
     li = ApifyLinkedInTool(client=MagicMock(), actor_id="x")
     tw = ApifyTwitterTool(client=MagicMock(), actor_id="x")
+    red = ApifyXiaohongshuTool(client=MagicMock(), actor_id="x")
     assert ig.name == "apify_instagram"
     assert li.name == "apify_linkedin"
     assert tw.name == "apify_twitter"
-    assert all(t.response_format == "content_and_artifact" for t in (ig, li, tw))
+    assert red.name == "apify_xiaohongshu"
+    assert all(t.response_format == "content_and_artifact" for t in (ig, li, tw, red))
 
 
 def test_apify_client_real_api_compatibility():

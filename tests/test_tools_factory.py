@@ -39,3 +39,13 @@ def test_build_tools_rejects_unknown_name(monkeypatch):
     state = ScanState(scan_id="x", subject="s", config=ScanConfig())
     with pytest.raises(ScanConfigError):
         build_tools(ScanConfig(enabled_tools={"nope"}), state)
+
+
+def test_build_tools_includes_apify_xiaohongshu(monkeypatch):
+    """Registry must wire `apify_xiaohongshu` to ApifyXiaohongshuTool — added
+    2026-04-27 to give the agent direct Xiaohongshu search for CN-platform
+    presence (Tavily/Google don't index Xiaohongshu reliably)."""
+    monkeypatch.setenv("APIFY_TOKEN", "k")
+    state = ScanState(scan_id="x", subject="s", config=ScanConfig())
+    tools = build_tools(ScanConfig(enabled_tools={"apify_xiaohongshu"}), state)
+    assert [t.name for t in tools] == ["apify_xiaohongshu"]
