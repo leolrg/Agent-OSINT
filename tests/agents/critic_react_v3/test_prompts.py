@@ -93,3 +93,53 @@ def test_build_system_prompt_states_final_report_envelope():
         tool_names=["web_search"],
     )
     assert "extracted_identifiers" in p
+
+
+from osint.agents.critic_react_v3.prompts import Ledger, parse_ledger
+
+
+def test_parse_ledger_well_formed():
+    text = (
+        "```json\n"
+        '{"open": ["Q1", "Q2"], "answered": ["A1"], "dropped": []}\n'
+        "```\nThe rest of the report."
+    )
+    led = parse_ledger(text)
+    assert led.open == ["Q1", "Q2"]
+    assert led.answered == ["A1"]
+    assert led.dropped == []
+
+
+def test_parse_ledger_empty_lists_when_keys_missing():
+    text = '```json\n{"open": []}\n```'
+    led = parse_ledger(text)
+    assert led.open == []
+    assert led.answered == []
+    assert led.dropped == []
+
+
+def test_parse_ledger_no_block_returns_empty_ledger():
+    led = parse_ledger("No JSON block at all in this text.")
+    assert led.open == []
+    assert led.answered == []
+    assert led.dropped == []
+
+
+def test_parse_ledger_malformed_json_returns_empty_ledger():
+    text = '```json\n{"open": [bad}\n```'
+    led = parse_ledger(text)
+    assert led.open == []
+    assert led.answered == []
+    assert led.dropped == []
+
+
+def test_parse_ledger_picks_first_json_block_only():
+    """The first JSON block IS the ledger; later blocks (e.g. extracted_identifiers)
+    must not be parsed as a ledger."""
+    text = (
+        '```json\n{"open": ["Q1"]}\n```\n'
+        'Some prose.\n'
+        '```json\n{"extracted_identifiers": {"emails": []}}\n```'
+    )
+    led = parse_ledger(text)
+    assert led.open == ["Q1"]

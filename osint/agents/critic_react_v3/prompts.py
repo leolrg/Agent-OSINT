@@ -138,3 +138,47 @@ def build_system_prompt(
         goal_block=goal_block,
         tools_block=tools_block,
     )
+
+
+import json
+import re
+from dataclasses import dataclass, field
+
+
+_FENCED_JSON_FIRST = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+@dataclass
+class Ledger:
+    """Open-question ledger parsed from an assistant message.
+
+    Empty lists everywhere when no parsable ledger is present — callers
+    treat that case as "no open questions" so a malformed ledger never
+    blocks termination.
+    """
+    open: list[str] = field(default_factory=list)
+    answered: list[str] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
+
+
+def parse_ledger(text: str) -> Ledger:
+    """Parse the first fenced ```json``` block at the head of `text`.
+
+    Returns an empty Ledger if no block is present or the block is
+    malformed JSON or not an object.
+    """
+    if not text:
+        return Ledger()
+    m = _FENCED_JSON_FIRST.search(text)
+    if not m:
+        return Ledger()
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return Ledger()
+    if not isinstance(data, dict):
+        return Ledger()
+    def _list(key: str) -> list[str]:
+        v = data.get(key) or []
+        return [str(x) for x in v] if isinstance(v, list) else []
+    return Ledger(open=_list("open"), answered=_list("answered"), dropped=_list("dropped"))
