@@ -248,15 +248,14 @@ def test_cli_agent_flag_default_is_react_v1(monkeypatch):
     assert args.agent == "react_v1"
 
 
-from osint.cli import _build_args
-
-
 def test_cli_accepts_critic_react_v3_agent():
+    from osint.cli import _build_args
     args = _build_args(["scan", "Jane", "--agent", "critic_react_v3"])
     assert args.agent == "critic_react_v3"
 
 
 def test_cli_accepts_preset_and_goal():
+    from osint.cli import _build_args
     args = _build_args([
         "scan", "Jane",
         "--agent", "critic_react_v3",
@@ -268,6 +267,7 @@ def test_cli_accepts_preset_and_goal():
 
 
 def test_cli_accepts_critic_caps():
+    from osint.cli import _build_args
     args = _build_args([
         "scan", "Jane",
         "--max-critic-rejections", "5",
@@ -278,6 +278,7 @@ def test_cli_accepts_critic_caps():
 
 
 def test_cli_preset_default_is_general_when_omitted():
+    from osint.cli import _build_args
     args = _build_args(["scan", "Jane"])
     assert args.preset == "general"
     assert args.goal == ""
