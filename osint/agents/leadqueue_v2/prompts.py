@@ -133,10 +133,8 @@ When to mark UN-satisfied:
   '<text>' or remove it from the report".
 - An obvious dimension is missing. Examples: report mentions employer
   but no LinkedIn evidence; subject is technical but no GitHub probe
-  done; subject is Chinese but no zhihu/weibo/xiaohongshu searches
-  (note: apify_xiaohongshu searches RedNote directly when the keyword
-  has plausible CN-platform presence); report mentions a project name
-  without sources. List as gap; emit a new_lead.
+  done; subject is Chinese but no zhihu/weibo searches; report mentions
+  a project name without sources. List as gap; emit a new_lead.
 
 When to mark satisfied:
 - Every report claim is grounded.
