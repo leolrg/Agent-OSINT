@@ -41,3 +41,12 @@ async def test_dispatcher_rejects_unknown_agent_version(tmp_path):
     cfg = ScanConfig(enabled_tools={"web_search"}, agent_version="does_not_exist")
     with pytest.raises(ScanConfigError, match="unknown agent_version"):
         await scan(subject="Jane", config=cfg, llm=MagicMock(), scans_dir=tmp_path)
+
+
+from osint.agents import AGENTS
+from osint.agents.critic_react_v3 import CriticReactV3Runner
+
+
+def test_critic_react_v3_registered():
+    assert "critic_react_v3" in AGENTS
+    assert AGENTS["critic_react_v3"] is CriticReactV3Runner
