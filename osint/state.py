@@ -13,6 +13,8 @@ class StopReason(str, Enum):
     WALL_CLOCK = "wall_clock"
     FINAL_REPORT = "final_report"
     EMPTY_FINAL = "empty_final"
+    CRITIC_ACCEPTED = "critic_accepted"
+    CRITIC_EXHAUSTED = "critic_exhausted"
 
 
 @dataclass

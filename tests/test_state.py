@@ -96,3 +96,8 @@ def test_scanstate_v2_fields_default_empty():
     assert s.findings == []
     assert s.leads_log == []
     assert s.verifier_iterations == 0
+
+
+def test_stop_reason_has_critic_values():
+    assert StopReason.CRITIC_ACCEPTED.value == "critic_accepted"
+    assert StopReason.CRITIC_EXHAUSTED.value == "critic_exhausted"
