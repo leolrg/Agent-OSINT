@@ -18,6 +18,9 @@ class Verdict:
 
 
 _VERDICT_RE = re.compile(r"VERDICT\s*:\s*(ACCEPT|REJECT)", re.IGNORECASE)
+_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.+\S)\s*$")
+_SECTION_HEADER_RE = re.compile(r"^\s*[A-Z][A-Z _-]{1,30}\s*:\s*$")
+_GAPS_HEADER_RE = re.compile(r"^\s*GAPS\s*:", re.IGNORECASE)
 
 
 def parse_critic_verdict(text: str) -> Verdict:
@@ -39,16 +42,21 @@ def parse_critic_verdict(text: str) -> Verdict:
     decision = m.group(1).upper()
     if decision == "ACCEPT":
         return Verdict(accept=True)
-    # REJECT — collect bullets after a "GAPS:" header (case-insensitive).
+    # REJECT — collect bullets after a "GAPS:" header.
     lines = text.splitlines()
     gaps: list[str] = []
     in_gaps = False
     for line in lines:
-        if re.match(r"^\s*GAPS\s*:", line, re.IGNORECASE):
+        if _GAPS_HEADER_RE.match(line):
             in_gaps = True
             continue
-        if in_gaps:
-            stripped = line.strip()
-            if stripped.startswith("- "):
-                gaps.append(stripped[2:].strip())
+        if not in_gaps:
+            continue
+        # Stop at any subsequent ALL-CAPS section header (e.g. NOTES:, SUMMARY:).
+        if _SECTION_HEADER_RE.match(line):
+            in_gaps = False
+            continue
+        bm = _BULLET_RE.match(line)
+        if bm:
+            gaps.append(bm.group(1))
     return Verdict(accept=False, gaps=gaps)
