@@ -108,6 +108,22 @@ async def test_cli_keeps_default_llm_when_no_flags(tmp_path: Path):
     assert cfg.llm.api_key_env_var == "XAI_API_KEY"
 
 
+async def test_cli_accepts_xai_multiagent_runner(tmp_path: Path):
+    fake = type("R", (), {})()
+    fake.scan_id = "sid"
+    fake.path = tmp_path / "sid.json"
+    fake.markdown_path = tmp_path / "sid.md"
+    (tmp_path / "sid.json").write_text("{}")
+    with patch("osint.cli.scan", new=AsyncMock(return_value=fake)) as m:
+        await main([
+            "scan", "Jane",
+            "--agent", "xai_multiagent_v1",
+            "--scans-dir", str(tmp_path),
+        ])
+    cfg = m.call_args.kwargs["config"]
+    assert cfg.agent_version == "xai_multiagent_v1"
+
+
 async def test_cli_loads_env_file_when_flag_passed(tmp_path: Path, monkeypatch):
     """--env-file populates os.environ from a .env file before scan() runs."""
     monkeypatch.delenv("OSINT_TEST_KEY", raising=False)

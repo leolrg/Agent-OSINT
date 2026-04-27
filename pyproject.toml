@@ -8,6 +8,7 @@ dependencies = [
     "langgraph>=0.2.60,<2.0",
     "langchain-core>=0.3.20",
     "langchain-openai>=0.2.10",
+    "openai>=1.90",
     "apify-client>=1.7",
     "maigret>=0.4.4",
     "structlog>=24.1",

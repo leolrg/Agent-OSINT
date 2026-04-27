@@ -31,11 +31,13 @@ def _build_parser() -> argparse.ArgumentParser:
                         "--budget-usd / --max-calls. Default: 1.")
     s.add_argument(
         "--agent",
-        choices=["react_v1", "leadqueue_v2"],
+        choices=["react_v1", "leadqueue_v2", "xai_multiagent_v1"],
         default="react_v1",
         help="Agent runner. react_v1 = ReAct loop with multi-pass deepen "
              "(default; behaves like before this flag existed). "
-             "leadqueue_v2 = priority-queue investigation with verifier loop.",
+             "leadqueue_v2 = priority-queue investigation with verifier loop. "
+             "xai_multiagent_v1 = Grok 4.20 multi-agent via xAI Responses "
+             "with Apify LinkedIn/Instagram Remote MCP.",
     )
     s.add_argument("--enable", action="append", default=None,
                    help="Enable a tool by name. Repeatable. Defaults to the standard free set.")
