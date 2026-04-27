@@ -66,3 +66,43 @@ def test_reject_stops_collecting_at_next_header():
     v = parse_critic_verdict(text)
     assert v.accept is False
     assert v.gaps == ["real gap"]
+
+
+from unittest.mock import MagicMock
+
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
+
+from osint.agents.critic_react_v3.critic import critic
+
+
+async def test_critic_returns_accept_verdict():
+    fake = FakeMessagesListChatModel(responses=[AIMessage(content="VERDICT: ACCEPT\n")])
+    v = await critic(
+        subject="Jane",
+        goal="coffee chat about ML",
+        preset="coffee_career",
+        draft="Jane works at Acme on ML infra...",
+        tool_calls=[],
+        llm=fake,
+        cost_cb=MagicMock(),
+    )
+    assert v.accept is True
+    assert v.gaps == []
+
+
+async def test_critic_returns_reject_with_gaps():
+    fake = FakeMessagesListChatModel(responses=[AIMessage(
+        content="VERDICT: REJECT\nGAPS:\n- No current role\n- Email never probed\n"
+    )])
+    v = await critic(
+        subject="Jane",
+        goal="",
+        preset="dossier",
+        draft="Jane lives in Tokyo.",
+        tool_calls=[],
+        llm=fake,
+        cost_cb=MagicMock(),
+    )
+    assert v.accept is False
+    assert v.gaps == ["No current role", "Email never probed"]
