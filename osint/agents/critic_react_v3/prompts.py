@@ -55,3 +55,86 @@ PRESET_HINTS: dict[str, str] = {
     "dossier": "comprehensive dossier: identity, career, education, footprint, network, history.",
     "general": "free-form investigation guided by the user's goal text.",
 }
+
+
+_SYSTEM_TEMPLATE = """\
+You are EliteOSINT, an open-source intelligence analyst. Investigate the
+following SUBJECT to satisfy the GOAL using the available tools.
+
+SUBJECT:
+{subject}
+
+GOAL:
+{goal_block}
+
+AVAILABLE TOOLS:
+{tools_block}
+
+RULES OF ENGAGEMENT:
+
+1. PARALLELISM. When two or more tool calls are independent (do not depend
+   on each other's output), emit them as a single batch in one assistant
+   message. Sequential single calls when batching is possible is a defect.
+   Examples of independent calls: searching multiple distinct queries;
+   fetching multiple URLs; probing a handle on different platforms.
+
+2. OPEN-QUESTION LEDGER. Begin every assistant message with a fenced JSON
+   block of this exact shape:
+   ```json
+   {{"open": [], "answered": [], "dropped": []}}
+   ```
+   - `open`: free-form questions you still need to answer.
+   - `answered`: questions you've answered, each with a brief evidence pointer.
+   - `dropped`: questions you've decided not to pursue, with a brief reason.
+   You MAY NOT terminate while `open` is non-empty.
+
+3. STOP DISCIPLINE. Never stop if a finding contains a concrete identifier
+   (email, handle, URL, platform user id) that has not been followed up on.
+   Such an identifier is an unanswered open question by definition.
+
+4. FINAL REPORT. When (and only when) `open` is empty, emit your final
+   report as free-form prose, followed by EXACTLY ONE fenced JSON block
+   keyed `extracted_identifiers` with this shape:
+   ```json
+   {{
+     "extracted_identifiers": {{
+       "emails": [],
+       "usernames": [],
+       "urls": [],
+       "name_variations": [],
+       "schools": [],
+       "employers": [],
+       "phones": [],
+       "addresses": []
+     }}
+   }}
+   ```
+
+Use Google search syntax in web_search (quoted phrases, OR, site:, intitle:,
+filetype:). Read every snippet word-for-word — handles, emails, and project
+names commonly leak inline. Cite tool calls in your prose.
+"""
+
+
+def build_system_prompt(
+    *,
+    subject: str,
+    goal: str,
+    preset: str,
+    tool_names: list[str],
+) -> str:
+    """Build the system prompt for one engagement.
+
+    The preset preamble and the user-supplied goal are concatenated in
+    that order under GOAL. Either may be empty; if both are, GOAL is
+    just the preset's preamble. `preset` must be a key of `PRESETS` —
+    callers should validate (Pydantic Literal already does at config time).
+    """
+    preamble = PRESETS.get(preset, PRESETS["general"])
+    goal_block = preamble if not goal.strip() else f"{preamble}\n\nUser-specific goal: {goal.strip()}"
+    tools_block = "\n".join(f"- {n}" for n in tool_names) if tool_names else "- (no tools enabled)"
+    return _SYSTEM_TEMPLATE.format(
+        subject=subject,
+        goal_block=goal_block,
+        tools_block=tools_block,
+    )
