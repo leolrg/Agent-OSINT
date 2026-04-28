@@ -61,6 +61,18 @@ def _build_parser() -> argparse.ArgumentParser:
              "limit (default 50). Caps tool calls in one agent invocation.",
     )
     s.add_argument(
+        "--min-tool-calls", type=int, default=None,
+        help="critic_react_v3 only: hard floor on total tool-call count "
+             "below which the critic's ACCEPT verdict is overridden to "
+             "REJECT (default 1, non-binding). Set higher to force depth.",
+    )
+    s.add_argument(
+        "--min-critic-rejections", type=int, default=None,
+        help="critic_react_v3 only: minimum critic rejection rounds before "
+             "an ACCEPT verdict terminates the loop (default 0). Set 1+ to "
+             "guarantee at least N+1 engagements.",
+    )
+    s.add_argument(
         "--agent",
         choices=["react_v1", "leadqueue_v2", "xai_multiagent_v1", "critic_react_v3"],
         default="react_v1",
@@ -214,6 +226,10 @@ async def main(argv: list[str] | None = None) -> int:
         kwargs["max_critic_rejections"] = args.max_critic_rejections
     if args.max_recursion_per_engagement is not None:
         kwargs["max_recursion_per_engagement"] = args.max_recursion_per_engagement
+    if args.min_tool_calls is not None:
+        kwargs["min_tool_calls"] = args.min_tool_calls
+    if args.min_critic_rejections is not None:
+        kwargs["min_critic_rejections"] = args.min_critic_rejections
     if args.max_processor_tool_calls is not None:
         kwargs["max_processor_tool_calls"] = args.max_processor_tool_calls
     if args.max_verifier_iterations is not None:

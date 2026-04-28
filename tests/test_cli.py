@@ -282,3 +282,22 @@ def test_cli_preset_default_is_general_when_omitted():
     args = _build_args(["scan", "Jane"])
     assert args.preset == "general"
     assert args.goal == ""
+
+
+def test_cli_accepts_min_tool_calls_and_min_critic_rejections():
+    from osint.cli import _build_args
+    args = _build_args([
+        "scan", "Jane",
+        "--min-tool-calls", "30",
+        "--min-critic-rejections", "1",
+    ])
+    assert args.min_tool_calls == 30
+    assert args.min_critic_rejections == 1
+
+
+def test_cli_min_floors_default_to_none():
+    """CLI defaults to None so ScanConfig defaults are used unless overridden."""
+    from osint.cli import _build_args
+    args = _build_args(["scan", "Jane"])
+    assert args.min_tool_calls is None
+    assert args.min_critic_rejections is None

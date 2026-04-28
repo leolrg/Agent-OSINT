@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, NonNegativeFloat, PositiveFloat, PositiveInt
+from pydantic import BaseModel, Field, NonNegativeFloat, NonNegativeInt, PositiveFloat, PositiveInt, model_validator
 
 
 def default_enabled_tools() -> set[str]:
@@ -76,6 +76,26 @@ class ScanConfig(BaseModel):
     # LangGraph recursion limit.
     max_critic_rejections: PositiveInt = 3
     max_recursion_per_engagement: PositiveInt = 50
+    # critic_react_v3 only: hard floor on the total tool-call count below
+    # which the critic's ACCEPT verdict is overridden to REJECT (regardless
+    # of draft quality). Default 1 — non-binding for any real scan. Set
+    # higher (e.g. 25–40) when you want guaranteed depth on a dossier.
+    min_tool_calls: PositiveInt = 1
+    # critic_react_v3 only: minimum number of critic rejection rounds
+    # before any ACCEPT verdict can terminate the loop. Default 0 — no
+    # floor. Set 1+ to force at least N+1 engagements regardless of how
+    # quickly the critic is satisfied. Must be <= max_critic_rejections.
+    min_critic_rejections: NonNegativeInt = 0
+
+    @model_validator(mode="after")
+    def _check_critic_rejection_floor_below_cap(self) -> "ScanConfig":
+        if self.min_critic_rejections > self.max_critic_rejections:
+            raise ValueError(
+                f"min_critic_rejections ({self.min_critic_rejections}) must be "
+                f"<= max_critic_rejections ({self.max_critic_rejections}); "
+                f"otherwise the loop deadlocks."
+            )
+        return self
 
 
 class ToolCallRecord(BaseModel):

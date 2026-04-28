@@ -103,3 +103,39 @@ def test_scan_config_preset_must_be_known():
 def test_scan_config_goal_accepts_free_form_string():
     c = ScanConfig(goal="coffee chat about ML infra")
     assert c.goal == "coffee chat about ML infra"
+
+
+def test_scan_config_min_tool_calls_default_is_one():
+    c = ScanConfig()
+    assert c.min_tool_calls == 1
+
+
+def test_scan_config_min_critic_rejections_default_is_zero():
+    c = ScanConfig()
+    assert c.min_critic_rejections == 0
+
+
+def test_scan_config_min_tool_calls_must_be_positive():
+    with pytest.raises(ValidationError):
+        ScanConfig(min_tool_calls=0)
+
+
+def test_scan_config_min_critic_rejections_accepts_zero():
+    c = ScanConfig(min_critic_rejections=0)
+    assert c.min_critic_rejections == 0
+
+
+def test_scan_config_min_critic_rejections_rejects_negative():
+    with pytest.raises(ValidationError):
+        ScanConfig(min_critic_rejections=-1)
+
+
+def test_scan_config_validates_min_le_max_critic_rejections():
+    """Setting min greater than max would deadlock the loop — must reject at config time."""
+    with pytest.raises(ValidationError):
+        ScanConfig(min_critic_rejections=5, max_critic_rejections=3)
+
+
+def test_scan_config_min_equal_max_critic_rejections_is_valid():
+    c = ScanConfig(min_critic_rejections=3, max_critic_rejections=3)
+    assert c.min_critic_rejections == 3
