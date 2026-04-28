@@ -78,9 +78,9 @@ class ScanConfig(BaseModel):
     max_recursion_per_engagement: PositiveInt = 50
     # critic_react_v3 only: hard floor on the total tool-call count below
     # which the critic's ACCEPT verdict is overridden to REJECT (regardless
-    # of draft quality). Default 1 — non-binding for any real scan. Set
-    # higher (e.g. 25–40) when you want guaranteed depth on a dossier.
-    min_tool_calls: PositiveInt = 1
+    # of draft quality). Default 0 — no floor. Set higher (e.g. 25–40)
+    # when you want guaranteed depth on a dossier.
+    min_tool_calls: NonNegativeInt = 0
     # critic_react_v3 only: minimum number of critic rejection rounds
     # before any ACCEPT verdict can terminate the loop. Default 0 — no
     # floor. Set 1+ to force at least N+1 engagements regardless of how

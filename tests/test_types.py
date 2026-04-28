@@ -105,9 +105,9 @@ def test_scan_config_goal_accepts_free_form_string():
     assert c.goal == "coffee chat about ML infra"
 
 
-def test_scan_config_min_tool_calls_default_is_one():
+def test_scan_config_min_tool_calls_default_is_zero():
     c = ScanConfig()
-    assert c.min_tool_calls == 1
+    assert c.min_tool_calls == 0
 
 
 def test_scan_config_min_critic_rejections_default_is_zero():
@@ -115,9 +115,9 @@ def test_scan_config_min_critic_rejections_default_is_zero():
     assert c.min_critic_rejections == 0
 
 
-def test_scan_config_min_tool_calls_must_be_positive():
+def test_scan_config_min_tool_calls_rejects_negative():
     with pytest.raises(ValidationError):
-        ScanConfig(min_tool_calls=0)
+        ScanConfig(min_tool_calls=-1)
 
 
 def test_scan_config_min_critic_rejections_accepts_zero():

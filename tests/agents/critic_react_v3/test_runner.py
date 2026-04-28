@@ -186,3 +186,71 @@ async def test_runner_handles_prose_before_ledger_block():
     assert stop_reason is None
     assert parsed["extracted_identifiers"] == {"employers": ["Acme"]}
     assert "Jane works at Acme" in parsed["report"]["text"]
+
+
+async def test_runner_min_tool_calls_floor_overrides_accept():
+    """min_tool_calls=20: agent finishes with 0 tool calls, critic ACCEPT,
+    but floor not met -> override to REJECT, re-engage; second engagement
+    has empty ledger and ACCEPT, but tool-call count is still 0 -> override
+    again. Eventually CRITIC_EXHAUSTED kicks in (max=2 by default in this test)."""
+    fake = BindableFake(responses=[
+        AIMessage(content=HAPPY_DRAFT, tool_calls=[]),    # engagement 1
+        AIMessage(content="VERDICT: ACCEPT\n"),           # critic 1 (overridden)
+        AIMessage(content=HAPPY_DRAFT, tool_calls=[]),    # engagement 2
+        AIMessage(content="VERDICT: ACCEPT\n"),           # critic 2 (overridden -> exhaust)
+    ])
+    state = ScanState(
+        scan_id="x", subject="Jane",
+        config=ScanConfig(
+            agent_version="critic_react_v3",
+            min_tool_calls=20,
+            max_critic_rejections=1,
+        ),
+    )
+    parsed, stop_reason = await CriticReactV3Runner().run(
+        subject="Jane", state=state, llm=fake, tools=[], cost_cb=MagicMock(),
+    )
+    # Floor never met (0 tool calls in fake setup) -> exhaustion via overrides
+    assert stop_reason == StopReason.CRITIC_EXHAUSTED
+
+
+async def test_runner_min_critic_rejections_floor_blocks_first_accept():
+    """min_critic_rejections=1: agent ACCEPT on first try -> override to REJECT
+    once -> agent ACCEPT again -> floor met -> real ACCEPT."""
+    fake = BindableFake(responses=[
+        AIMessage(content=HAPPY_DRAFT, tool_calls=[]),     # engagement 1
+        AIMessage(content="VERDICT: ACCEPT\n"),            # critic 1 (overridden by floor)
+        AIMessage(content=HAPPY_DRAFT_2, tool_calls=[]),   # engagement 2
+        AIMessage(content="VERDICT: ACCEPT\n"),            # critic 2 (real accept; floor met)
+    ])
+    state = ScanState(
+        scan_id="x", subject="Jane",
+        config=ScanConfig(
+            agent_version="critic_react_v3",
+            min_critic_rejections=1,
+            max_critic_rejections=3,
+        ),
+    )
+    parsed, stop_reason = await CriticReactV3Runner().run(
+        subject="Jane", state=state, llm=fake, tools=[], cost_cb=MagicMock(),
+    )
+    # Second ACCEPT goes through cleanly because rejection count (1) >= floor (1).
+    assert stop_reason is None
+    # The HAPPY_DRAFT_2 employer/name_variations should be present
+    assert "VP Eng" in parsed["report"]["text"]
+
+
+async def test_runner_min_critic_rejections_zero_is_default_behavior():
+    """min_critic_rejections=0 (default): agent ACCEPT on first try -> immediate ACCEPT."""
+    fake = BindableFake(responses=[
+        AIMessage(content=HAPPY_DRAFT, tool_calls=[]),
+        AIMessage(content="VERDICT: ACCEPT\n"),
+    ])
+    state = ScanState(
+        scan_id="x", subject="Jane",
+        config=ScanConfig(agent_version="critic_react_v3"),  # default min=0
+    )
+    _, stop_reason = await CriticReactV3Runner().run(
+        subject="Jane", state=state, llm=fake, tools=[], cost_cb=MagicMock(),
+    )
+    assert stop_reason is None

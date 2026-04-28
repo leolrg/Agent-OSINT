@@ -73,9 +73,15 @@ _CRITIC_SYSTEM = """\
 You are reviewing whether an investigation has met its goal.
 
 Decide: accept the draft, or reject with specific gaps the investigator
-should address. A gap is something the goal needs that the draft does
-not currently support, OR a concrete identifier in the draft (email,
-handle, url, id) that was never followed up on.
+should address. A gap is one of:
+1. Something the goal needs that the draft does not currently support.
+2. A concrete identifier in the draft (email, handle, url, id) that
+   was never followed up on.
+3. An ENABLED TOOL that was never invoked, when the subject is
+   plausibly relevant to that tool. (For example: a crypto/tech
+   founder when `apify_twitter` is enabled and never called.)
+   When flagging this kind of gap, name the tool explicitly in the
+   bullet so the agent knows to invoke it.
 
 Respond in this exact form:
 
@@ -116,6 +122,7 @@ async def critic(
     preset: str,
     draft: str,
     tool_calls: list[Any],
+    enabled_tools: list[str],
     llm: BaseChatModel,
     cost_cb: Any,
 ) -> Verdict:
@@ -124,10 +131,12 @@ async def critic(
     Parser failures default to ACCEPT (parse_critic_verdict policy).
     Network/API errors propagate — caller decides whether to retry.
     """
+    enabled_block = ", ".join(enabled_tools) if enabled_tools else "(none)"
     user_msg = (
         f"GOAL: {goal or '(none — use preset hint)'}\n"
         f"PRESET HINT: {PRESET_HINTS.get(preset, PRESET_HINTS['general'])}\n"
         f"SUBJECT: {subject}\n\n"
+        f"ENABLED TOOLS: {enabled_block}\n"
         f"TOOLS USED (count by name): {_summarize_tool_calls(tool_calls)}\n\n"
         f"DRAFT REPORT:\n{draft}"
     )

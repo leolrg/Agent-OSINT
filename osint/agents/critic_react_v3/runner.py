@@ -26,7 +26,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
 
-from osint.agents.critic_react_v3.critic import critic
+from osint.agents.critic_react_v3.critic import Verdict, critic
 from osint.agents.critic_react_v3.prompts import build_system_prompt, parse_ledger
 from osint.agents.react_v1.prompts import parse_report
 from osint.agents.react_v1.runner import _serialize_messages, _synthesize
@@ -154,9 +154,33 @@ class CriticReactV3Runner:
                 preset=config.preset,
                 draft=last_text,
                 tool_calls=state.tool_calls,
+                enabled_tools=sorted(config.enabled_tools),
                 llm=llm,
                 cost_cb=cost_cb,
             )
+            # Hard floors override the critic's verdict. They never grant
+            # ACCEPT; they only override an ACCEPT to REJECT when a floor
+            # is unmet. Floor-overrides increment `rejections` so the loop
+            # is bounded by `max_critic_rejections` even under floor pressure.
+            floor_gaps: list[str] = []
+            if verdict.accept and len(state.tool_calls) < config.min_tool_calls:
+                floor_gaps.append(
+                    f"Hard floor on tool calls not met: have "
+                    f"{len(state.tool_calls)}, need at least "
+                    f"{config.min_tool_calls}. Continue investigating "
+                    f"with new tool calls."
+                )
+            if verdict.accept and rejections < config.min_critic_rejections:
+                floor_gaps.append(
+                    f"Hard floor on critic rejection rounds: "
+                    f"{rejections}/{config.min_critic_rejections}. Add "
+                    f"another investigative pass."
+                )
+            if floor_gaps:
+                # Treat as REJECT, with the floor message replacing the critic's
+                # gap list (the critic's ACCEPT had no gap content anyway).
+                verdict = Verdict(accept=False, gaps=floor_gaps)
+
             if verdict.accept:
                 last_stop_reason = StopReason.CRITIC_ACCEPTED
                 break

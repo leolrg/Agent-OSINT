@@ -84,6 +84,7 @@ async def test_critic_returns_accept_verdict():
         preset="coffee_career",
         draft="Jane works at Acme on ML infra...",
         tool_calls=[],
+        enabled_tools=[],
         llm=fake,
         cost_cb=MagicMock(),
     )
@@ -101,6 +102,7 @@ async def test_critic_returns_reject_with_gaps():
         preset="dossier",
         draft="Jane lives in Tokyo.",
         tool_calls=[],
+        enabled_tools=[],
         llm=fake,
         cost_cb=MagicMock(),
     )
@@ -155,3 +157,37 @@ def test_summarize_tool_calls_unknown_when_neither():
     calls = [object(), object()]
     summary = _summarize_tool_calls(calls)
     assert summary == "unknown=2"
+
+
+async def test_critic_includes_enabled_tools_in_user_message():
+    """The critic's user message must enumerate enabled tools so the LLM
+    can spot enabled-but-unused tools as gaps."""
+    captured: dict = {}
+
+    class CapturingFake(FakeMessagesListChatModel):
+        async def ainvoke(self, messages, *args, **kwargs):
+            captured["messages"] = messages
+            return await super().ainvoke(messages, *args, **kwargs)
+
+    fake = CapturingFake(responses=[AIMessage(content="VERDICT: ACCEPT\n")])
+    await critic(
+        subject="Jane", goal="", preset="dossier",
+        draft="Draft body...",
+        tool_calls=[],
+        enabled_tools=["web_search", "apify_twitter", "apify_linkedin"],
+        llm=fake, cost_cb=MagicMock(),
+    )
+    assert "messages" in captured
+    user_msg = captured["messages"][-1]  # last is HumanMessage
+    text = getattr(user_msg, "content", "") or ""
+    assert "web_search" in text
+    assert "apify_twitter" in text
+    assert "apify_linkedin" in text
+    assert "ENABLED TOOLS" in text or "enabled tools" in text.lower()
+
+
+async def test_critic_system_prompt_mentions_unused_tool_gap_rule():
+    """The critic's system prompt must tell the LLM to flag enabled-but-unused
+    tools as gaps. We assert by checking the system message content."""
+    from osint.agents.critic_react_v3.critic import _CRITIC_SYSTEM
+    assert "enabled" in _CRITIC_SYSTEM.lower() and "never invoked" in _CRITIC_SYSTEM.lower()
