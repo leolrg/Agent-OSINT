@@ -76,5 +76,31 @@ services:
       localstack: { condition: service_healthy }
       migrate:  { condition: service_completed_successfully }
 
+  api-py:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/agent_osint
+      REDIS_URL: redis://redis:6379/0
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: agent-osint-local-results
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      LOG_LEVEL: INFO
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      localstack: { condition: service_healthy }
+      migrate:  { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:
