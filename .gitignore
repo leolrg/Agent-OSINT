@@ -8,7 +8,6 @@ scans/
 .env
 
 # Phase 1 deployment additions
-.env
 .env.local
 web-next/node_modules/
 web-next/.next/

@@ -1,4 +1,4 @@
-.PHONY: help dev down logs test smoke fmt
+.PHONY: help dev down logs test smoke
 
 help:
 	@echo "make dev       - bring up the local stack (postgres+redis+localstack+migrate+worker)"
