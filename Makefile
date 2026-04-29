@@ -20,4 +20,4 @@ test:
 	pytest -v
 
 smoke:
-	@echo "Phase 1 smoke test target — implemented in Task 12"
+	./scripts/smoke_test.sh
