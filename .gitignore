@@ -6,3 +6,13 @@ __pycache__/
 venv/
 scans/
 .env
+
+# Phase 1 deployment additions
+.env
+.env.local
+web-next/node_modules/
+web-next/.next/
+web-next/.drizzle-cache/
+cdk.out/
+infra/cdk/cdk.context.json
+.localstack/
