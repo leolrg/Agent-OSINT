@@ -5,10 +5,10 @@ __pycache__/
 .venv/
 venv/
 scans/
-.env
 
 # Phase 1 deployment additions
-.env.local
+.env*
+!.env.example
 web-next/node_modules/
 web-next/.next/
 web-next/.drizzle-cache/
