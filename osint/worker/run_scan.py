@@ -1,15 +1,77 @@
 """Wrapper that turns SQS params into a ScanConfig and runs the agent.
 
-Phase 1 Task 9: stub returns canned bytes (test patches it).
-Phase 1 Task 10: real implementation calling osint.run.scan(...).
+The agent (osint.run.scan) writes a JSON file to scans_dir; we use a
+tempdir, read the resulting file, and return its bytes for the worker
+to upload to S3.
 """
 from __future__ import annotations
 
+import asyncio
+import tempfile
+from pathlib import Path
 from typing import Any
+
+from osint.run import scan as run_scan_async
+from osint.types import ScanConfig
+
+
+def _build_config(params: dict[str, Any]) -> ScanConfig:
+    """Translate SQS params into a ScanConfig.
+
+    SQS params shape (matches Phase 2 Next.js submit form):
+      { subject, agent, preset?, goal?, budget_usd?, max_calls?, max_seconds?, ... }
+    Anything not provided falls back to ScanConfig defaults.
+
+    Note: the SQS-side parameter names (`max_calls`, `max_seconds`, `agent`)
+    differ from the ScanConfig field names (`max_tool_calls`,
+    `max_wall_clock_sec`, `agent_version`). We translate here so the wire
+    format stays human-friendly while the model stays canonical.
+    """
+    kwargs: dict[str, Any] = {}
+    if "agent" in params:
+        kwargs["agent_version"] = params["agent"]
+    if "budget_usd" in params:
+        kwargs["budget_usd"] = float(params["budget_usd"])
+    if "max_calls" in params:
+        kwargs["max_tool_calls"] = int(params["max_calls"])
+    if "max_seconds" in params:
+        kwargs["max_wall_clock_sec"] = int(params["max_seconds"])
+    if "preset" in params:
+        kwargs["preset"] = params["preset"]
+    if "goal" in params:
+        kwargs["goal"] = params["goal"]
+    return ScanConfig(**kwargs)
 
 
 def execute_scan(*, scan_id: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Run the agent. Returns dict with `result_bytes`, `total_cost_usd`,
-    `total_tool_calls`. Raises on failure.
+    """Run the agent end-to-end.
+
+    Returns: { result_bytes: bytes, total_cost_usd: float, total_tool_calls: int }
+    Raises whatever the agent raises (worker catches and marks failed).
     """
-    raise NotImplementedError("Real implementation lands in Task 10")
+    subject = params.get("subject")
+    if not subject:
+        raise ValueError("params.subject is required")
+    config = _build_config(params)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        scans_dir = Path(tmp)
+        result = asyncio.run(run_scan_async(
+            subject=subject, config=config, scans_dir=scans_dir,
+        ))
+        # The agent writes <internal_scan_id>.json into scans_dir. Find it.
+        # The agent's internal scan_id is distinct from our SQS scan_id, so
+        # we can't reconstruct the path — glob for *.json instead. Should be
+        # exactly one (the agent also writes a .md sibling, which we ignore).
+        json_files = list(scans_dir.glob("*.json"))
+        if not json_files:
+            raise RuntimeError("agent produced no scan JSON")
+        result_bytes = json_files[0].read_bytes()
+
+    # ScanResult exposes total_cost_usd directly. There's no
+    # total_tool_calls field — the tool-call count is len(tool_calls).
+    return {
+        "result_bytes": result_bytes,
+        "total_cost_usd": float(result.total_cost_usd),
+        "total_tool_calls": len(result.tool_calls),
+    }
