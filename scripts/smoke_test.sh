@@ -19,14 +19,24 @@ docker compose up -d --wait
 
 echo "[2/5] Seeding user + scan row..."
 SUBJECT="${SMOKE_SUBJECT:-Jane Doe smoke test}"
-read -r USER_ID SCAN_ID < <(docker compose exec -T postgres psql -U app -d agent_osint -tA -F' ' <<SQL
-INSERT INTO users (email, password_hash)
-  VALUES ('smoke-$(date +%s)@example.com', 'x') RETURNING id \gset
+read -r USER_ID SCAN_ID < <(docker compose exec -T postgres psql -U app -d agent_osint -tA -F' ' \
+    -v subject="$SUBJECT" -v timestamp="$(date +%s)" <<'SQL'
+WITH new_user AS (
+  INSERT INTO users (email, password_hash)
+  VALUES (CONCAT('smoke-', :'timestamp', '@example.com'), 'x')
+  RETURNING id
+)
 INSERT INTO scans (user_id, status, agent, params)
-  VALUES (:'id', 'queued', 'react_v1',
-          jsonb_build_object('subject', '$SUBJECT', 'agent', 'react_v1',
-                             'budget_usd', 0.50, 'max_calls', 5, 'max_seconds', 120))
-  RETURNING user_id, id;
+SELECT id, 'queued', 'react_v1',
+       jsonb_build_object(
+         'subject', :'subject',
+         'agent', 'react_v1',
+         'budget_usd', 0.50,
+         'max_calls', 5,
+         'max_seconds', 120
+       )
+FROM new_user
+RETURNING user_id, id;
 SQL
 )
 echo "  user_id=$USER_ID scan_id=$SCAN_ID"
