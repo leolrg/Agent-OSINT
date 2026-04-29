@@ -1,3 +1,4 @@
+import { desc } from 'drizzle-orm';
 import {
   pgTable, uuid, text, timestamp, jsonb, integer, numeric, index,
 } from 'drizzle-orm/pg-core';
@@ -36,7 +37,7 @@ export const scans = pgTable('scans', {
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
 }, (t) => ({
-  userCreatedIdx: index('scans_user_created_idx').on(t.userId, t.createdAt.desc()),
+  userCreatedIdx: index('scans_user_created_idx').on(t.userId, desc(t.createdAt)),
   statusStartedIdx: index('scans_status_started_idx').on(t.status, t.startedAt),
 }));
 
