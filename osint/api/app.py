@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from osint.api.routes import agents, health, scans
+from osint.api.routes import agents, health, scans, stream
 
 
 def create_app() -> FastAPI:
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(agents.router)
     app.include_router(scans.router)
+    app.include_router(stream.router)
     return app
 
 
