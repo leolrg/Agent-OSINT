@@ -116,6 +116,7 @@ services:
       SQS_QUEUE_URL: http://localstack:4566/000000000000/agent-osint-scans
       MAX_CONCURRENT_SCANS_PER_USER: "2"
       NEXT_PUBLIC_API_BASE: http://localhost:8000
+      API_BASE_INTERNAL: http://api-py:8000
     volumes:
       - ./web-next:/app/web-next
     ports: ["3000:3000"]
