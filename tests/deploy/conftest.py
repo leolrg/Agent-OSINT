@@ -59,3 +59,22 @@ def pg_url():
         yield url
     finally:
         subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_db(request, pg_url):
+    """Truncate app tables between integration tests so they don't share state.
+
+    Only runs for tests marked `integration` (the marker is the gate that
+    selects which tests use the shared Postgres). Cascading from `users`
+    cleans up `sessions`, `scans`, and `scan_runs`.
+    """
+    if "integration" not in {m.name for m in request.node.iter_markers()}:
+        yield
+        return
+    yield
+    engine = create_engine(pg_url)
+    with engine.begin() as c:
+        c.execute(text(
+            "TRUNCATE users, allowed_emails RESTART IDENTITY CASCADE"
+        ))
