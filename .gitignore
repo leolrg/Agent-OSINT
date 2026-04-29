@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-scans/
+/scans/
 
 # Phase 1 deployment additions
 .env*
@@ -12,6 +12,8 @@ scans/
 web-next/node_modules/
 web-next/.next/
 web-next/.drizzle-cache/
+web-next/tsconfig.tsbuildinfo
 cdk.out/
 infra/cdk/cdk.context.json
 .localstack/
+.superpowers/

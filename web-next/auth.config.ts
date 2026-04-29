@@ -12,4 +12,18 @@ export const authConfig = {
   pages: {
     signIn: '/auth/signin',
   },
+  callbacks: {
+    // Persist the user id on the JWT so it survives across requests.
+    async jwt({ token, user }) {
+      if (user?.id) token.sub = user.id;
+      return token;
+    },
+    // Surface the id on session.user.id for server components.
+    async session({ session, token }) {
+      if (session.user && token.sub) {
+        session.user.id = token.sub;
+      }
+      return session;
+    },
+  },
 } satisfies NextAuthConfig;

@@ -26,6 +26,7 @@
   "include": [
     "drizzle.config.ts",
     "drizzle/**/*.ts",
+    "types/**/*.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [
