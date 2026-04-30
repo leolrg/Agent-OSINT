@@ -1,4 +1,4 @@
-.PHONY: help dev down logs test smoke
+.PHONY: help dev down logs test smoke e2e
 
 help:
 	@echo "make dev       - bring up the local stack (postgres+redis+localstack+migrate+worker)"
@@ -21,3 +21,6 @@ test:
 
 smoke:
 	./scripts/smoke_test.sh
+
+e2e:
+	cd web-next && npx playwright install --with-deps chromium && npx playwright test
