@@ -1,0 +1,117 @@
+name: Deploy Prod
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: agent-osint
+  ENVIRONMENT_NAME: prod
+  STACK_NAME: AgentOsintProdStack
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/cdk/package-lock.json
+
+      - name: Ensure ECR repositories
+        run: |
+          set -euo pipefail
+          for repo in \
+            "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web-next" \
+            "${PROJECT_NAME}-${ENVIRONMENT_NAME}-api-py" \
+            "${PROJECT_NAME}-${ENVIRONMENT_NAME}-worker-py"; do
+            aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1 \
+              || aws ecr create-repository \
+                --repository-name "$repo" \
+                --image-scanning-configuration scanOnPush=true >/dev/null
+          done
+
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          docker build -t "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-web-next:$IMAGE_TAG" web-next
+          docker build -t "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-api-py:$IMAGE_TAG" -f infra/docker/api/Dockerfile .
+          docker build -t "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-worker-py:$IMAGE_TAG" -f infra/docker/worker/Dockerfile .
+          docker push "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-web-next:$IMAGE_TAG"
+          docker push "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-api-py:$IMAGE_TAG"
+          docker push "$REGISTRY/${PROJECT_NAME}-${ENVIRONMENT_NAME}-worker-py:$IMAGE_TAG"
+
+      - name: Deploy CDK stack
+        working-directory: infra/cdk
+        env:
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          npm ci
+          npx cdk deploy "$STACK_NAME" \
+            -c projectName="$PROJECT_NAME" \
+            -c environmentName="$ENVIRONMENT_NAME" \
+            -c webImageTag="$IMAGE_TAG" \
+            -c apiImageTag="$IMAGE_TAG" \
+            -c workerImageTag="$IMAGE_TAG" \
+            --require-approval never
+
+      - name: Run database migrations
+        run: |
+          set -euo pipefail
+          outputs=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs" \
+            --output json)
+          sg=$(echo "$outputs" | jq -r '.[] | select(.OutputKey=="TaskSecurityGroupId") | .OutputValue')
+          subnets=$(echo "$outputs" | jq -r '.[] | select(.OutputKey=="PrivateSubnetIds") | .OutputValue')
+          task_arn=$(aws ecs run-task \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --launch-type FARGATE \
+            --task-definition "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web-next" \
+            --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sg],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"web-next","command":["sh","-c","export DATABASE_URL_NODE=\"postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}?sslmode=require\"; npx drizzle-kit migrate --config drizzle.config.ts"]}]}' \
+            --query 'tasks[0].taskArn' \
+            --output text)
+          aws ecs wait tasks-stopped \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --tasks "$task_arn" \
+            --query 'tasks[0].containers[?name==`web-next`].exitCode | [0]' \
+            --output text)
+          test "$exit_code" = "0"
+
+      - name: Smoke test ALB
+        run: |
+          set -euo pipefail
+          alb_url=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AlbUrl'].OutputValue" \
+            --output text)
+          curl --fail --retry 12 --retry-delay 10 "$alb_url/healthz"
