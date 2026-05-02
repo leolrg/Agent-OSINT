@@ -15,8 +15,7 @@ PRESETS: dict[str, str] = {
         "I'm preparing for a coffee chat with this person, focused on their career. "
         "Find their current role and employer, recent shipped work or projects, "
         "any public talks/posts/papers worth referencing, and shared interests "
-        "that might come up. Flag anything sensitive to avoid (recent layoff, "
-        "controversy, loss). Skip family, addresses, and history older than ~5y "
+        "that might come up. Skip family, addresses "
         "unless directly relevant."
     ),
     "coffee_personal": (
@@ -48,7 +47,7 @@ PRESETS: dict[str, str] = {
 
 
 PRESET_HINTS: dict[str, str] = {
-    "coffee_career": "career-focused coffee chat: current role, recent work, talking points, things to avoid.",
+    "coffee_career": "career-focused coffee chat: current role, recent work, talking points.",
     "coffee_personal": "personal coffee chat: hobbies, communities, recent posts, no invasive details.",
     "reconnect": "reconnect with old contact: recent moves, life events, conversation openers.",
     "sales_outreach": "warm outreach: company, role, recent public comms, mutual connections.",
