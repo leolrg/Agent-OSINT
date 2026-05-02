@@ -16,6 +16,22 @@ python -m osint.cli scan "Subject Name" --agent xai_multiagent_v1
 python -m osint.cli scan "Jane Doe" --agent critic_react_v3 --preset coffee_career --goal "Meeting about her transformer-inference work"
 ```
 
+## Web Provider
+
+`web_search` and `web_extract` are configured independently. Both default to
+Apify (`APIFY_TOKEN`) unless their specific provider variable is set:
+
+```
+OSINT_WEB_SEARCH_PROVIDER=tavily
+OSINT_WEB_EXTRACT_PROVIDER=apify
+```
+
+Tavily search always uses `search_depth=advanced`; Tavily extract defaults to
+`extract_depth=advanced`.
+
+The Apify social tools (`apify_instagram`, `apify_linkedin`, `apify_twitter`)
+still use `APIFY_TOKEN`.
+
 The v2 scan JSON includes two extra fields not present in v1:
 - `findings` — every claim discovered, with evidence + confidence
 - `leads_log` — every investigation lead processed, with kind/priority/depth

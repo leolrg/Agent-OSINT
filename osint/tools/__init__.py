@@ -13,6 +13,7 @@ from osint.tools.apify import (
     WebSearchTool,
 )
 from osint.tools.maigret import MaigretTool
+from osint.tools.tavily import TavilyExtractTool, TavilySearchTool
 from osint.types import ScanConfig
 
 
@@ -47,18 +48,67 @@ _COSTS = {
 }
 
 
+_TAVILY_WEB_COSTS = {
+    # Tavily advanced search = 2 credits; PAYG = $0.008/credit.
+    "web_search": 0.016,
+    # Tavily advanced extract = 2 credits per 5 successful extractions; most
+    # agent calls batch a small set of URLs, so budget one credit per call.
+    "web_extract": 0.016,
+}
+
+
 def _require_env(var: str, tool: str) -> None:
     if not os.environ.get(var):
         raise ScanConfigError(f"{tool} enabled but {var} is not set")
 
 
+def _validate_web_provider(provider: str) -> str:
+    provider = provider.lower()
+    if provider not in {"apify", "tavily"}:
+        raise ScanConfigError(
+            f"unsupported web provider: {provider!r}; expected 'apify' or 'tavily'"
+        )
+    return provider
+
+
+def _web_provider(config: ScanConfig, name: str) -> str:
+    opts = config.tool_options.get("web", {})
+    if "provider" in opts:
+        raise ScanConfigError(
+            "tool_options.web.provider is no longer supported; use "
+            "tool_options.web.search_provider and/or "
+            "tool_options.web.extract_provider"
+        )
+    provider_key = "search_provider" if name == "web_search" else "extract_provider"
+    env_var = "OSINT_WEB_SEARCH_PROVIDER" if name == "web_search" else "OSINT_WEB_EXTRACT_PROVIDER"
+    provider = (
+        opts.get(provider_key)
+        or os.environ.get(env_var)
+        or "apify"
+    )
+    return _validate_web_provider(str(provider))
+
+
+def _make_web_tool(name: str, config: ScanConfig) -> BaseTool:
+    provider = _web_provider(config, name)
+    if provider == "tavily":
+        _require_env("TAVILY_API_KEY", name)
+        opts = config.tool_options.get("web", {})
+        if name == "web_search":
+            return TavilySearchTool()
+        return TavilyExtractTool(extract_depth=opts.get("extract_depth", "advanced"))
+
+    _require_env("APIFY_TOKEN", name)
+    if name == "web_search":
+        return WebSearchTool()
+    return WebExtractTool()
+
+
 def _make_raw_tool(name: str, config: ScanConfig) -> BaseTool:
     if name == "web_search":
-        _require_env("APIFY_TOKEN", name)
-        return WebSearchTool()
+        return _make_web_tool(name, config)
     if name == "web_extract":
-        _require_env("APIFY_TOKEN", name)
-        return WebExtractTool()
+        return _make_web_tool(name, config)
     if name == "maigret":
         opts = config.tool_options.get("maigret", {})
         return MaigretTool(proxy_url=opts.get("proxy_url"))
@@ -78,5 +128,8 @@ def build_tools(config: ScanConfig, state: ScanState) -> list[CappedTool]:
     tools: list[CappedTool] = []
     for name in sorted(config.enabled_tools):
         raw = _make_raw_tool(name, config)
-        tools.append(CappedTool(wrapped=raw, state=state, est_cost_usd=_COSTS.get(name, 0.0)))
+        est_cost = _COSTS.get(name, 0.0)
+        if name in {"web_search", "web_extract"} and _web_provider(config, name) == "tavily":
+            est_cost = _TAVILY_WEB_COSTS[name]
+        tools.append(CappedTool(wrapped=raw, state=state, est_cost_usd=est_cost))
     return tools

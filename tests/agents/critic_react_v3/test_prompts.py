@@ -95,6 +95,44 @@ def test_build_system_prompt_states_final_report_envelope():
     assert "extracted_identifiers" in p
 
 
+def test_build_system_prompt_borrows_react_v1_report_format():
+    p = build_system_prompt(
+        subject="Jane Doe",
+        goal="",
+        preset="dossier",
+        tool_names=["web_search", "web_extract"],
+    )
+    for heading in [
+        "**Executive Summary**",
+        "**Identified Name Variations & Aliases**",
+        "**Comprehensive Profile**",
+        "**Digital & Social Media Footprint**",
+        "**Key Associates & Network Map**",
+        "**Timeline of Significant Events**",
+        "**Hypotheses, Patterns & Potential Red Flags**",
+        "**Leads for Further Investigation**",
+        "**Sources**",
+        "**Overall Assessment**",
+    ]:
+        assert heading in p
+    assert "The prose IS the report" in p
+
+
+def test_build_system_prompt_pushes_deeper_investigation():
+    p = build_system_prompt(
+        subject="Jane Doe",
+        goal="",
+        preset="general",
+        tool_names=["web_search", "web_extract", "apify_twitter"],
+    )
+    lower = p.lower()
+    assert "treat those keywords only as initial seeds" in lower
+    assert "every new piece of information must generate" in lower
+    assert "at least 15 distinct web_search queries" in lower
+    assert "at least 5 web_extract calls" in lower
+    assert "2 cross-reference points" in lower
+
+
 from osint.agents.critic_react_v3.prompts import Ledger, parse_ledger
 
 

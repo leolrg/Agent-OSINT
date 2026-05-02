@@ -72,7 +72,7 @@ Search-and-extract pattern
   e. If you find a URL that contains hyperlink that likely leads to more information (e.g. a profile page that links to their personal website, or a news article that mentions an interview), add that URL as a new search vector and investigate it in the same way.
   f. If the search is unsatisfactory try MANY variations of the search query because searching api is not perfect.
 
-Phrasing matters — Google's ranking is sensitive to small changes:
+Phrasing matters — search ranking is sensitive to small changes:
   - Exactly TWO quoted name variants joined by OR; do NOT add a third.
   - The platform list goes in ONE parenthesized OR group of 5–6 platforms.
     Mix CN platforms (zhihu, weibo, xiaohongshu) with English platforms
@@ -194,8 +194,8 @@ the system prompt specified:
 
 # Per-tool one-line routing rules, only included for tools actually enabled.
 _ROUTING_RULES = {
-    "web_search": "web_search — Google web search (apify/google-search-scraper). Returns ranked organic results with URL, title, and a 100-250 char snippet. Read every snippet WORD FOR WORD — handles, emails, and project names commonly leak inline (e.g. 'xhs/twitter:<handle>', '<x>.eth', '@<x>'). Pass `max_results` (1-100, default 30); each +10 results costs ~$0.002. Follow up with web_extract on URLs whose snippet implies more substance.",
-    "web_extract": "web_extract — fetch full Markdown content of one or more URLs (apify/website-content-crawler, HTTP-only cheerio mode). Use after web_search on URLs that look promising. CANNOT extract scraper-blocked / login-walled origins (returns 403 or empty): linkedin.com, instagram.com, facebook.com, tiktok.com, x.com, twitter.com, threads.net, zhihu.com, weibo.com. For LinkedIn URLs route to apify_linkedin; Instagram → apify_instagram; X/Twitter → apify_twitter. For Zhihu/Weibo, the search snippet is your best evidence — it often inlines the data anyway.",
+    "web_search": "web_search — configurable web search provider. Returns ranked results with URL, title, and snippet content. Read every snippet WORD FOR WORD — handles, emails, and project names commonly leak inline (e.g. 'xhs/twitter:<handle>', '<x>.eth', '@<x>'). Pass `max_results` when you need broader recall; follow up with web_extract on URLs whose snippet implies more substance.",
+    "web_extract": "web_extract — fetch full Markdown content of one or more URLs through the configured web extraction provider. Use after web_search on URLs that look promising. CANNOT reliably extract scraper-blocked / login-walled origins (often returns 403 or empty): linkedin.com, instagram.com, facebook.com, tiktok.com, x.com, twitter.com, threads.net, zhihu.com, weibo.com. For LinkedIn URLs route to apify_linkedin; Instagram → apify_instagram; X/Twitter → apify_twitter. For Zhihu/Weibo, the search snippet is your best evidence — it often inlines the data anyway.",
     "maigret": "maigret — given a confirmed/likely username, map which sites that handle exists on. Don't use for general search; only when you have an actual username.",
     "apify_instagram": "apify_instagram — fetch a specific Instagram profile and recent posts. Requires a confirmed handle.",
     "apify_linkedin": "apify_linkedin — fetch a specific LinkedIn profile by full URL.",
