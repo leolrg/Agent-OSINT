@@ -17,15 +17,14 @@ export function StepsDrawer({ scanId }: { scanId: string }) {
   const [steps, setSteps] = useState<Step[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
   useEffect(() => {
     if (!open || loaded) return;
-    fetch(`${apiBase}/api/scans/${scanId}/steps`, { credentials: 'include' })
+    fetch(`/api/scans/${scanId}/steps`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : { steps: [] }))
       .then((d) => { setSteps(d.steps ?? []); setLoaded(true); })
       .catch(() => setLoaded(true));
-  }, [open, loaded, scanId, apiBase]);
+  }, [open, loaded, scanId]);
 
   if (!open) {
     return (

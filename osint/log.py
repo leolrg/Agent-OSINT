@@ -4,7 +4,12 @@ import sys
 import structlog
 
 
-def configure_logging(level: int = logging.INFO) -> None:
+def configure_logging(level: int = logging.INFO, *, force: bool = False) -> None:
+    # Idempotent: if another caller (e.g. the worker, which splices in a
+    # RedisEventSink) has already configured structlog, don't overwrite
+    # their processor chain. Pass force=True to truly reset.
+    if structlog.is_configured() and not force:
+        return
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

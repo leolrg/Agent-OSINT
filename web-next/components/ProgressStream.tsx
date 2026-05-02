@@ -32,24 +32,35 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
   );
   const [active, setActive] = useState<{ displayLabel: string; argSummary: string } | undefined>();
   const [tail, setTail] = useState<TailItem[]>([]);
-  const [elapsed, setElapsed] = useState(
-    startedAt ? Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 1000) : 0,
-  );
+  // Initialize to 0 so SSR and first client render agree — the real
+  // elapsed value uses Date.now() which differs between server render
+  // time and hydration time, which would throw a hydration mismatch.
+  // The effect below re-baselines against startedAt on the client.
+  const [elapsed, setElapsed] = useState(0);
   const seenSeq = useRef<number>(-1);
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
+  const elapsedRef = useRef(0);
 
-  // Tick the elapsed timer.
+  // Tick the elapsed timer + baseline against startedAt on mount.
   useEffect(() => {
     if (status === 'done') return;
-    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    if (startedAt) {
+      const baseline = Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 1000);
+      elapsedRef.current = baseline;
+      setElapsed(baseline);
+    }
+    const t = setInterval(() => {
+      setElapsed((e) => {
+        const next = e + 1;
+        elapsedRef.current = next;
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(t);
-  }, [status]);
+  }, [status, startedAt]);
 
   useEffect(() => {
-    if (status === 'done') return;
-    const es = new EventSource(`${apiBase}/api/stream/scans/${scanId}`, {
-      withCredentials: true,
-    });
+    if (initialStatus === 'completed' || initialStatus === 'failed') return;
+    const es = new EventSource(`/api/stream/scans/${scanId}`);
     es.onopen = () => setStatus('live');
     es.onmessage = (msg) => {
       let evt: Event;
@@ -63,7 +74,7 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
       switch (evt.event) {
         case 'tool.started':
           setActive({
-            displayLabel: evt.display_label ?? 'Tool',
+            displayLabel: evt.display_label ?? evt.tool_name ?? 'Tool',
             argSummary: evt.arg_summary ?? '',
           });
           break;
@@ -71,8 +82,8 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
           setActive(undefined);
           setTail((prev) => [
             {
-              ts: elapsed,
-              displayLabel: evt.display_label ?? 'Tool',
+              ts: elapsedRef.current,
+              displayLabel: evt.display_label ?? evt.tool_name ?? 'Tool',
               argSummary: evt.arg_summary ?? '',
               resultSummary:
                 evt.result_count !== undefined ? `${evt.result_count} results` :
@@ -82,6 +93,15 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
             },
             ...prev,
           ]);
+          break;
+        case 'scan.pass.start':
+          setActive({ displayLabel: 'Investigating', argSummary: '' });
+          break;
+        case 'scan.pass.synthesize':
+          setActive({ displayLabel: 'Synthesizing report', argSummary: '' });
+          break;
+        case 'scan.pass.done':
+          setActive({ displayLabel: 'Pass complete', argSummary: '' });
           break;
         case 'scan.completed':
           setStatus('done');
@@ -97,14 +117,22 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
     };
     es.onerror = () => setStatus('error');
     return () => es.close();
-  }, [scanId, apiBase, status]);
+  }, [scanId, initialStatus, onTerminal]);
 
   if (status === 'done') return null;
+
+  const displayedActive =
+    active ??
+    (status === 'error'
+      ? { displayLabel: 'Reconnecting…', argSummary: '' }
+      : status === 'connecting'
+        ? { displayLabel: 'Connecting…', argSummary: '' }
+        : undefined);
 
   return (
     <>
       <StatusPill
-        active={active}
+        active={displayedActive}
         elapsedSec={Math.floor(elapsed)}
       />
       <RecentTail items={tail} />

@@ -7,7 +7,8 @@ export default auth((req) => {
   const { pathname } = req.nextUrl;
   const isAuthPage = pathname.startsWith('/auth/');
   const isApi = pathname.startsWith('/api/');
-  if (isAuthPage || isApi) return;
+  const isDevPage = process.env.NODE_ENV !== 'production' && pathname.startsWith('/dev/');
+  if (isAuthPage || isApi || isDevPage) return;
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = '/auth/signin';

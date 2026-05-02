@@ -2,6 +2,7 @@ import contextvars
 from datetime import datetime, timezone
 from typing import Any, Type
 
+import structlog
 from langchain_core.callbacks import AsyncCallbackManagerForToolRun
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -10,6 +11,8 @@ from pydantic import BaseModel, PrivateAttr
 from osint.errors import ScanStopped
 from osint.state import ScanState
 from osint.types import ToolCallRecord
+
+_tool_logger = structlog.get_logger("tool")
 
 
 # Per-asyncio-task storage for the tool_call_id pulled from `ainvoke`'s input.
@@ -84,6 +87,13 @@ class CappedTool(BaseTool):
         artifact: Any = None
         error: str | None = None
 
+        _tool_logger.info(
+            "tool.started",
+            scan_id=self._state.scan_id,
+            tool_name=self._wrapped.name,
+            args=kwargs,
+        )
+
         try:
             result = await self._wrapped._arun(*args, run_manager=run_manager, **kwargs)
             if self.response_format == "content_and_artifact" and isinstance(result, tuple):
@@ -107,6 +117,13 @@ class CappedTool(BaseTool):
             error = f"{type(e).__name__}: {e}"
             completed = datetime.now(timezone.utc)
             self._record(started, completed, tool_call_id, kwargs, None, None, error)
+            _tool_logger.info(
+                "tool.finished",
+                scan_id=self._state.scan_id,
+                tool_name=self._wrapped.name,
+                args=kwargs,
+                error=error,
+            )
             error_content = f"Tool error from {self._wrapped.name}: {error}"
             if self.response_format == "content_and_artifact":
                 return error_content, {"error": error}
@@ -115,6 +132,31 @@ class CappedTool(BaseTool):
         completed = datetime.now(timezone.utc)
         output_dict = artifact if isinstance(artifact, dict) else {"text": str(content)}
         self._record(started, completed, tool_call_id, kwargs, output_dict, artifact, None)
+
+        # Best-effort size/count for the UI tail.
+        result_count: int | None = None
+        result_size_bytes: int | None = None
+        if isinstance(artifact, list):
+            result_count = len(artifact)
+        elif isinstance(artifact, dict):
+            for k in ("results", "items", "hits", "matches"):
+                v = artifact.get(k)
+                if isinstance(v, list):
+                    result_count = len(v)
+                    break
+        try:
+            result_size_bytes = len(str(content).encode("utf-8"))
+        except Exception:
+            pass
+
+        _tool_logger.info(
+            "tool.finished",
+            scan_id=self._state.scan_id,
+            tool_name=self._wrapped.name,
+            args=kwargs,
+            result_count=result_count,
+            result_size_bytes=result_size_bytes,
+        )
 
         if self.response_format == "content_and_artifact":
             return content, artifact

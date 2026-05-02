@@ -1,10 +1,20 @@
 import { signIn } from '../../../auth';
+import { AuthError } from 'next-auth';
+import { redirect } from 'next/navigation';
 
-export default function SignInPage({
+export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; error?: string }>;
 }) {
+  const params = await searchParams;
+  const errorMessage =
+    params.error === 'CredentialsSignin'
+      ? 'Invalid email or password.'
+      : params.error
+      ? 'Could not sign in. Please try again.'
+      : null;
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-[380px] py-8">
@@ -17,16 +27,31 @@ export default function SignInPage({
           Welcome back.
         </h1>
 
+        {errorMessage && (
+          <div className="mt-4 border-2 border-[#7f1d1d] bg-white px-3 py-2 text-[12px] text-[#7f1d1d]">
+            {errorMessage}
+          </div>
+        )}
+
         <form
           className="mt-5 space-y-2.5"
           action={async (data) => {
             'use server';
-            const params = await searchParams;
-            await signIn('credentials', {
-              email: data.get('email'),
-              password: data.get('password'),
-              redirectTo: params.next ?? '/scans',
-            });
+            try {
+              await signIn('credentials', {
+                email: data.get('email'),
+                password: data.get('password'),
+                redirectTo: params.next ?? '/scans',
+              });
+            } catch (e) {
+              if (e instanceof AuthError) {
+                const next = params.next
+                  ? `&next=${encodeURIComponent(params.next)}`
+                  : '';
+                redirect(`/auth/signin?error=${e.type}${next}`);
+              }
+              throw e;
+            }
           }}
         >
           <input
