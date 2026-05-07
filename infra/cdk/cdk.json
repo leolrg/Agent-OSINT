@@ -1,0 +1,10 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "context": {
+    "projectName": "agent-osint",
+    "environmentName": "prod",
+    "webImageTag": "latest",
+    "apiImageTag": "latest",
+    "workerImageTag": "latest"
+  }
+}

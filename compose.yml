@@ -1,0 +1,131 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: agent_osint
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d agent_osint"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3,sqs
+      DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports: ["4566:4566"]
+    volumes:
+      - ./infra/localstack/init:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: node:22-alpine
+    working_dir: /app/web-next
+    environment:
+      DATABASE_URL_NODE: postgresql://app:app@postgres:5432/agent_osint
+    volumes:
+      - ./web-next:/app/web-next
+    command: ["sh", "-c", "npm install --no-audit --no-fund && npx drizzle-kit migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/agent_osint
+      REDIS_URL: redis://redis:6379/0
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: agent-osint-local-results
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/agent-osint-scans
+      SCAN_VISIBILITY_TIMEOUT_SECONDS: "5400"
+      SCAN_HEARTBEAT_SECONDS: "300"
+      LOG_LEVEL: INFO
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      APIFY_TOKEN: ${APIFY_TOKEN:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      localstack: { condition: service_healthy }
+      migrate:  { condition: service_completed_successfully }
+
+  api-py:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/agent_osint
+      REDIS_URL: redis://redis:6379/0
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: agent-osint-local-results
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      LOG_LEVEL: INFO
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      localstack: { condition: service_healthy }
+      migrate:  { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web-next:
+    image: node:22-alpine
+    working_dir: /app/web-next
+    environment:
+      DATABASE_URL_NODE: postgresql://app:app@postgres:5432/agent_osint
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:3000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: agent-osint-local-results
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/agent-osint-scans
+      MAX_CONCURRENT_SCANS_PER_USER: "2"
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
+      API_BASE_INTERNAL: http://api-py:8000
+    volumes:
+      - ./web-next:/app/web-next
+    ports: ["3000:3000"]
+    command: ["sh", "-c", "npm install --no-audit --no-fund && npm run dev"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      api-py:   { condition: service_healthy }
+      migrate:  { condition: service_completed_successfully }
+
+volumes:
+  pgdata:

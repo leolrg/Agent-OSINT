@@ -1,0 +1,167 @@
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+import pytest
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
+
+from osint.capped_tool import CappedTool
+from osint.errors import ScanStopped
+from osint.state import ScanState
+from osint.types import ScanConfig, ToolCallRecord
+
+
+class _EchoInput(BaseModel):
+    q: str
+
+
+class _Echo(BaseTool):
+    name: str = "echo"
+    description: str = "echoes"
+    args_schema: type = _EchoInput
+    response_format: str = "content_and_artifact"
+
+    def _run(self, q: str):
+        raise NotImplementedError
+
+    async def _arun(self, q: str, **kwargs) -> tuple[str, dict]:
+        return f"echo:{q}", {"echoed": q, "raw": {"q": q}}
+
+
+class _Plain(BaseTool):
+    name: str = "plain"
+    description: str = "plain string out"
+    args_schema: type = _EchoInput
+
+    def _run(self, q: str):
+        raise NotImplementedError
+
+    async def _arun(self, q: str, **kwargs) -> str:
+        return f"plain:{q}"
+
+
+async def test_capped_tool_records_artifact_as_raw():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.01)
+    out = await capped.ainvoke({"q": "hi", "_tool_call_id": "call_1"})
+    # When response_format is content_and_artifact, ainvoke returns the
+    # content string (LangChain unwraps the artifact internally).
+    assert out == "echo:hi"
+    assert len(state.tool_calls) == 1
+    rec = state.tool_calls[0]
+    assert rec.tool == "echo"
+    assert rec.tool_call_id == "call_1"
+    assert rec.output == {"echoed": "hi", "raw": {"q": "hi"}}
+    assert rec.raw == {"echoed": "hi", "raw": {"q": "hi"}}
+    assert rec.cost_usd == 0.01
+    assert rec.error is None
+
+
+async def test_capped_tool_records_plain_string_output():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Plain(), state=state, est_cost_usd=0.0)
+    out = await capped.ainvoke({"q": "hi", "_tool_call_id": "c"})
+    assert out == "plain:hi"
+    rec = state.tool_calls[0]
+    assert rec.output == {"text": "plain:hi"}
+    assert rec.raw == "plain:hi"
+
+
+async def test_capped_tool_raises_when_stopped():
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig(budget_usd=0.01))
+    # inflate cost so state is already over budget
+    now = datetime.now(timezone.utc)
+    state.record_tool_call(ToolCallRecord(
+        turn=0, tool="prev", tool_call_id=None,
+        input={}, output={}, raw={},
+        started_at=now, completed_at=now, cost_usd=0.02,
+    ))
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.01)
+    with pytest.raises(ScanStopped) as exc:
+        await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    assert exc.value.reason == "budget"
+
+
+async def test_capped_tool_returns_error_content_on_inner_exception():
+    """Inner-tool exceptions are converted to error-content the LLM can see,
+    NOT re-raised. LangGraph's default behaviour on a re-raise is to crash
+    the entire graph, which would kill a multi-tool scan on the first bad
+    URL / blocked origin / 429. The error is still recorded in the audit
+    log via tool_calls[].error so the failure is visible after the scan.
+
+    String-output (response_format='content') variant.
+    """
+
+    class _Boom(BaseTool):
+        name: str = "boom"
+        description: str = "raises"
+        args_schema: type = _EchoInput
+
+        def _run(self, q: str):
+            raise NotImplementedError
+
+        async def _arun(self, q: str, **kwargs) -> str:
+            raise RuntimeError("nope")
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Boom(), state=state, est_cost_usd=0.0)
+    out = await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    # No raise — the loop survives.
+    assert isinstance(out, str)
+    assert "Tool error from boom" in out
+    assert "RuntimeError" in out
+    assert "nope" in out
+    # Audit record still captures the error.
+    rec = state.tool_calls[0]
+    assert "nope" in rec.error
+    assert rec.output is None
+
+
+async def test_capped_tool_returns_error_tuple_on_inner_exception_artifact_format():
+    """Same graceful-error behaviour for content_and_artifact tools: returns
+    (content_str, {"error": ...}) so LangGraph still sees a successful tool
+    return rather than an exception that would crash the loop."""
+
+    class _BoomArtifact(BaseTool):
+        name: str = "boom_artifact"
+        description: str = "raises"
+        args_schema: type = _EchoInput
+        response_format: str = "content_and_artifact"
+
+        def _run(self, q: str):
+            raise NotImplementedError
+
+        async def _arun(self, q: str, **kwargs):
+            raise ValueError("blocked origin")
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_BoomArtifact(), state=state, est_cost_usd=0.0)
+    out = await capped.ainvoke({"q": "x", "_tool_call_id": "c"})
+    # LangChain unwraps content_and_artifact tuples at the ainvoke boundary —
+    # callers see just the content; the artifact rides on the constructed
+    # ToolMessage. We assert on the content string here.
+    assert isinstance(out, str)
+    assert "Tool error from boom_artifact" in out
+    assert "ValueError" in out
+    assert "blocked origin" in out
+    # The audit record still has the error preserved.
+    assert "blocked origin" in state.tool_calls[0].error
+
+
+async def test_capped_tool_handles_parallel_invocations_independently():
+    """Two concurrent ainvoke() tasks on the same instance must not race on
+    tool_call_id (regression for the _pending_tool_call_id race that existed
+    when this was a per-instance PrivateAttr instead of a ContextVar)."""
+    import asyncio
+
+    state = ScanState(scan_id="s", subject="S", config=ScanConfig())
+    capped = CappedTool(wrapped=_Echo(), state=state, est_cost_usd=0.0)
+    results = await asyncio.gather(
+        capped.ainvoke({"q": "a", "_tool_call_id": "id_A"}),
+        capped.ainvoke({"q": "b", "_tool_call_id": "id_B"}),
+    )
+    # Both calls succeeded
+    assert {results[0], results[1]} == {"echo:a", "echo:b"}
+    # Both ToolCallRecords were tagged with the correct, distinct ids.
+    ids = {tc.tool_call_id for tc in state.tool_calls}
+    assert ids == {"id_A", "id_B"}

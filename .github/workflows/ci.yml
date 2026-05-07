@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Run pytest
+        run: pytest -v
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+      - name: Run web source tests
+        run: node --test test/*.mjs
+      - name: Build Next.js
+        env:
+          NEXTAUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+          NEXTAUTH_URL: http://localhost:3000
+          DATABASE_URL_NODE: postgresql://app:app@localhost:5432/agent_osint
+          API_BASE_INTERNAL: http://localhost:8000
+          NEXT_PUBLIC_API_BASE: http://localhost:8000
+        run: npm run build
+
+  cdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/cdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/cdk/package-lock.json
+      - name: Install CDK dependencies
+        run: npm ci
+      - name: Test CDK topology
+        run: npm test
+      - name: Synthesize CDK
+        run: npm run synth
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [python, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - name: Boot local stack
+        env:
+          NEXTAUTH_SECRET: local-dev-secret-change-me-32-bytes-min
+        run: docker compose up -d --build
+      - name: Run Playwright smoke
+        working-directory: web-next
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Stop local stack
+        if: always()
+        run: docker compose down -v

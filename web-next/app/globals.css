@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: #f5f4f1;
+  color: #0a0a0a;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+/* Brutalist primitives */
+.heavy-rule {
+  border-bottom: 3px solid #0a0a0a;
+}
+.dashed-rule {
+  border-top: 1px dashed #b4b3b0;
+}
+.label-uppercase {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.spotlight {
+  background: #0a0a0a;
+  color: #fff;
+}

@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+/scans/
+
+# Phase 1 deployment additions
+.env*
+!.env.example
+web-next/node_modules/
+web-next/.next/
+web-next/.drizzle-cache/
+web-next/tsconfig.tsbuildinfo
+cdk.out/
+infra/cdk/cdk.out/
+infra/cdk/node_modules/
+infra/cdk/cdk.context.json
+.localstack/
+.superpowers/

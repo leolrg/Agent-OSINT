@@ -1,0 +1,59 @@
+name: DB Migrate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: agent-osint
+  ENVIRONMENT_NAME: prod
+  STACK_NAME: AgentOsintProdStack
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECS network settings
+        id: stack
+        run: |
+          set -euo pipefail
+          outputs=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs" \
+            --output json)
+          sg=$(echo "$outputs" | jq -r '.[] | select(.OutputKey=="TaskSecurityGroupId") | .OutputValue')
+          subnets=$(echo "$outputs" | jq -r '.[] | select(.OutputKey=="PrivateSubnetIds") | .OutputValue')
+          echo "security_group=$sg" >> "$GITHUB_OUTPUT"
+          echo "subnets=$subnets" >> "$GITHUB_OUTPUT"
+
+      - name: Run Drizzle migration task
+        run: |
+          set -euo pipefail
+          task_arn=$(aws ecs run-task \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --launch-type FARGATE \
+            --task-definition "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web-next" \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ steps.stack.outputs.subnets }}],securityGroups=[${{ steps.stack.outputs.security_group }}],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"web-next","command":["sh","-c","export DATABASE_URL_NODE=\"postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}?sslmode=require\"; npx drizzle-kit migrate --config drizzle.config.ts"]}]}' \
+            --query 'tasks[0].taskArn' \
+            --output text)
+          aws ecs wait tasks-stopped \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks \
+            --cluster "${PROJECT_NAME}-${ENVIRONMENT_NAME}" \
+            --tasks "$task_arn" \
+            --query 'tasks[0].containers[?name==`web-next`].exitCode | [0]' \
+            --output text)
+          test "$exit_code" = "0"

@@ -1,0 +1,31 @@
+[2m2026-04-26T06:10:43.660516Z[0m [[32m[1minfo     [0m] [1mscan.start                    [0m [36menabled_tools[0m=[35m['apify_instagram', 'apify_linkedin', 'apify_twitter', 'tavily_extract', 'tavily_search'][0m [36mpasses[0m=[35m2[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m
+[2m2026-04-26T06:10:43.660784Z[0m [[32m[1minfo     [0m] [1mscan.pass.start               [0m [36mpass_num[0m=[35m1[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m [36mtotal_passes[0m=[35m2[0m
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> Status: RUNNING, Message: 
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:25.474Z ACTOR: Pulling container image of build W9K4A10Nq0Ggo3HwG from registry.
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:25.476Z ACTOR: Creating container.
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:25.523Z ACTOR: Starting container.
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:27.025Z [32mINFO[39m  System info[90m {"apifyVersion":"3.5.1","apifyClientVersion":"2.19.0","crawleeVersion":"3.15.2","osType":"Linux","nodeVersion":"v22.21.1"}[39m
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:27.220Z [32mINFO[39m  🔄 Linkedin Profile Enrichment Process Started..
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:27.512Z [32mINFO[39m  📄 Enriching Profile https://www.linkedin.com/in/simon-xingjian-wen-6b29a721a
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> 2026-04-26T06:11:50.096Z [32mINFO[39m  ✅ Successfully enriched profile: https://www.linkedin.com/in/simon-xingjian-wen-6b29a721a
+[36m[apify.Linkedin-Profile-Scraper runId:am46RJTWWHx4hsauA][0m -> Status: SUCCEEDED, Message: 
+[2m2026-04-26T06:12:58.341293Z[0m [[32m[1minfo     [0m] [1mscan.pass.done                [0m [36mcap_cut[0m=[35mNone[0m [36mcumulative_cost_usd[0m=[35m0.272468[0m [36mcumulative_tool_calls[0m=[35m9[0m [36mpass_num[0m=[35m1[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m
+[2m2026-04-26T06:12:58.342440Z[0m [[32m[1minfo     [0m] [1mscan.pass.start               [0m [36mpass_num[0m=[35m2[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m [36mtotal_passes[0m=[35m2[0m
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> Status: RUNNING, Message: 
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:26.018Z ACTOR: Pulling container image of build 1zaWqLxFq6nPcNdYk from registry.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:26.021Z ACTOR: Creating container.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:26.180Z ACTOR: Starting container.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.110Z [32mINFO[39m  System info[90m {"apifyVersion":"3.4.2","apifyClientVersion":"2.12.4","crawleeVersion":"3.13.5","osType":"Linux","nodeVersion":"v22.22.2"}[39m
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.231Z [32mINFO[39m  PHASE -- STARTING ACTOR.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.465Z [32mINFO[39m  [Status message]: Your run has started.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.526Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.528Z [33mWARN[39m  Your run has started.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.530Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.531Z [32mINFO[39m  The actor will try to retrieve 30 items.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.533Z [32mINFO[39m  If the cost reaches the limit, the actor will exit. The limit is $128.449639.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.600Z [32mINFO[39m  [Status message]: Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.639Z [31mERROR[39m Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> 2026-04-26T06:13:28.640Z [32mINFO[39m  [Status message]: Your run has finished.
+[36m[apify.twitter-scraper-lite runId:kPSbQWOasFxeht42e][0m -> Status: SUCCEEDED, Message: Your run has finished.
+[2m2026-04-26T06:14:43.383086Z[0m [[32m[1minfo     [0m] [1mscan.pass.done                [0m [36mcap_cut[0m=[35mNone[0m [36mcumulative_cost_usd[0m=[35m0.48459[0m [36mcumulative_tool_calls[0m=[35m17[0m [36mpass_num[0m=[35m2[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m
+[2m2026-04-26T06:14:43.408872Z[0m [[32m[1minfo     [0m] [1mscan.done                     [0m [36mduration_sec[0m=[35m239.75602925010026[0m [36mllm_cost_usd[0m=[35m0.33459[0m [36mllm_input_tokens[0m=[35m140043[0m [36mllm_output_tokens[0m=[35m9084[0m [36mscan_id[0m=[35m7fa4550f924a41b68a816ba2ff9fcbf7[0m [36mtool_calls[0m=[35m17[0m [36mtool_cost_usd[0m=[35m0.15000000000000002[0m [36mtotal_cost_usd[0m=[35m0.48459[0m

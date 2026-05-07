@@ -1,0 +1,79 @@
+[2m2026-04-26T06:19:44.842126Z[0m [[32m[1minfo     [0m] [1mscan.start                    [0m [36menabled_tools[0m=[35m['apify_instagram', 'apify_linkedin', 'apify_twitter', 'tavily_extract', 'tavily_search'][0m [36mpasses[0m=[35m2[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m
+[2m2026-04-26T06:19:44.842406Z[0m [[32m[1minfo     [0m] [1mscan.pass.start               [0m [36mpass_num[0m=[35m1[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m [36mtotal_passes[0m=[35m2[0m
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> Status: RUNNING, Message: 
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:20.759Z ACTOR: Pulling container image of build xm1dSw4vcxBI05r3O from registry.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:20.761Z ACTOR: Creating container.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:20.812Z ACTOR: Starting container.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:20.813Z ACTOR: Running under "LIMITED_PERMISSIONS" permission level.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:21.652Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v22.22.2"}[39m
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:21.910Z [32mINFO[39m  Results Limit [object Object], ACTOR_MAX_PAID_DATASET_ITEMS
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> Status: RUNNING, Message: Starting the scraper with 1 direct URL(s)
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:21.915Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> Status: RUNNING, Message: Starting the crawler.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:22.004Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:25.118Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:25.271Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":1,"requestsFailed":0,"retryHistogram":[1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":3092,"requestsFinishedPerMinute":18,"requestsFailedPerMinute":0,"requestTotalDurationMillis":3092,"requestsTotal":1,"crawlerRuntimeMillis":3335}[39m
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:25.272Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 1 requests: 1 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> 2026-04-26T06:20:25.273Z [32mINFO[39m  [Status message]: Scraper finished
+[36m[apify.instagram-scraper runId:Nb4tDOJhD8KAVbhQB][0m -> Status: SUCCEEDED, Message: Scraper finished
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> Status: RUNNING, Message: 
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:56.562Z ACTOR: Pulling container image of build 1zaWqLxFq6nPcNdYk from registry.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:56.564Z ACTOR: Creating container.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:56.616Z ACTOR: Starting container.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:57.989Z [32mINFO[39m  System info[90m {"apifyVersion":"3.4.2","apifyClientVersion":"2.12.4","crawleeVersion":"3.13.5","osType":"Linux","nodeVersion":"v22.22.2"}[39m
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.103Z [32mINFO[39m  PHASE -- STARTING ACTOR.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.345Z [32mINFO[39m  [Status message]: Your run has started.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.395Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.396Z [33mWARN[39m  Your run has started.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.396Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.396Z [32mINFO[39m  The actor will try to retrieve 20 items.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.397Z [32mINFO[39m  If the cost reaches the limit, the actor will exit. The limit is $128.398329.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.446Z [32mINFO[39m  [Status message]: Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.477Z [31mERROR[39m Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> Status: RUNNING, Message: Your run has finished.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> 2026-04-26T06:20:58.478Z [32mINFO[39m  [Status message]: Your run has finished.
+[36m[apify.twitter-scraper-lite runId:WHLe92nXvSfvgkYJm][0m -> Status: SUCCEEDED, Message: Your run has finished.
+[2m2026-04-26T06:22:13.652610Z[0m [[32m[1minfo     [0m] [1mscan.pass.done                [0m [36mcap_cut[0m=[35mNone[0m [36mcumulative_cost_usd[0m=[35m1.003784[0m [36mcumulative_tool_calls[0m=[35m12[0m [36mpass_num[0m=[35m1[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m
+[2m2026-04-26T06:22:13.653155Z[0m [[32m[1minfo     [0m] [1mscan.pass.start               [0m [36mpass_num[0m=[35m2[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m [36mtotal_passes[0m=[35m2[0m
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> Status: RUNNING, Message: 
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:56.756Z ACTOR: Pulling container image of build W9K4A10Nq0Ggo3HwG from registry.
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:56.759Z ACTOR: Creating container.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> Status: RUNNING, Message: 
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:56.751Z ACTOR: Pulling container image of build xm1dSw4vcxBI05r3O from registry.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:56.753Z ACTOR: Creating container.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:56.869Z ACTOR: Starting container.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> Status: RUNNING, Message: 
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:22:56.824Z ACTOR: Pulling container image of build 1zaWqLxFq6nPcNdYk from registry.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:22:56.826Z ACTOR: Creating container.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:56.871Z ACTOR: Running under "LIMITED_PERMISSIONS" permission level.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:57.515Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v22.22.2"}[39m
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:57.629Z [32mINFO[39m  Results Limit [object Object], ACTOR_MAX_PAID_DATASET_ITEMS
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:57.632Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> Status: RUNNING, Message: Starting the crawler.
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:56.835Z ACTOR: Starting container.
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:59.149Z [32mINFO[39m  System info[90m {"apifyVersion":"3.5.1","apifyClientVersion":"2.19.0","crawleeVersion":"3.15.2","osType":"Linux","nodeVersion":"v22.21.1"}[39m
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:59.336Z [32mINFO[39m  🔄 Linkedin Profile Enrichment Process Started..
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:22:56.901Z ACTOR: Starting container.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:22:59.696Z [32mINFO[39m  System info[90m {"apifyVersion":"3.4.2","apifyClientVersion":"2.12.4","crawleeVersion":"3.13.5","osType":"Linux","nodeVersion":"v22.22.2"}[39m
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:22:59.863Z [32mINFO[39m  PHASE -- STARTING ACTOR.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.247Z [32mINFO[39m  [Status message]: Your run has started.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.291Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.291Z [33mWARN[39m  Your run has started.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.292Z [33mWARN[39m  ###############################
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.293Z [32mINFO[39m  The actor will try to retrieve 30 items.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.293Z [32mINFO[39m  If the cost reaches the limit, the actor will exit. The limit is $128.398329.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.354Z [32mINFO[39m  [Status message]: Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.397Z [31mERROR[39m Access to this origin is disabled
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> 2026-04-26T06:23:00.398Z [32mINFO[39m  [Status message]: Your run has finished.
+[36m[apify.twitter-scraper-lite runId:oPcoeJdhbj6vUUMTR][0m -> Status: SUCCEEDED, Message: Your run has finished.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:22:57.698Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:23:01.565Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:23:01.631Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":1,"requestsFailed":0,"retryHistogram":[1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":3860,"requestsFinishedPerMinute":15,"requestsFailedPerMinute":0,"requestTotalDurationMillis":3860,"requestsTotal":1,"crawlerRuntimeMillis":3985}[39m
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:23:01.635Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 1 requests: 1 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> 2026-04-26T06:23:01.637Z [32mINFO[39m  [Status message]: Scraper finished
+[36m[apify.instagram-scraper runId:MbB4jVi3jaUVTUv5y][0m -> Status: SUCCEEDED, Message: Finished! Total 1 requests: 1 succeeded, 0 failed.
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:22:59.689Z [32mINFO[39m  📄 Enriching Profile https://www.linkedin.com/in/allison-wang-090a7b26
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> 2026-04-26T06:23:19.181Z [32mINFO[39m  ✅ Successfully enriched profile: https://www.linkedin.com/in/allison-wang-090a7b26
+[36m[apify.Linkedin-Profile-Scraper runId:dBMfjGkJHESgEQxB2][0m -> Status: SUCCEEDED, Message: 
+[2m2026-04-26T06:24:35.416476Z[0m [[32m[1minfo     [0m] [1mscan.pass.done                [0m [36mcap_cut[0m=[35mNone[0m [36mcumulative_cost_usd[0m=[35m1.390122[0m [36mcumulative_tool_calls[0m=[35m19[0m [36mpass_num[0m=[35m2[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m
+[2m2026-04-26T06:24:35.475101Z[0m [[32m[1minfo     [0m] [1mscan.done                     [0m [36mduration_sec[0m=[35m290.6422241659602[0m [36mllm_cost_usd[0m=[35m1.168122[0m [36mllm_input_tokens[0m=[35m556953[0m [36mllm_output_tokens[0m=[35m9036[0m [36mscan_id[0m=[35m190244c769624bec99200965f3ce3eba[0m [36mtool_calls[0m=[35m19[0m [36mtool_cost_usd[0m=[35m0.22200000000000003[0m [36mtotal_cost_usd[0m=[35m1.390122[0m
