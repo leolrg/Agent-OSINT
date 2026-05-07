@@ -63,7 +63,7 @@ def execute_scan(*, scan_id: str, params: dict[str, Any]) -> dict[str, Any]:
         log.info("scan.pass.start")
         time.sleep(1)
         log.info("tool.started", tool_name="web_search", args={"query": subject})
-        time.sleep(10)
+        time.sleep(2)
         log.info(
             "tool.finished",
             tool_name="web_search",

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { StatusPill } from './StatusPill';
 import { RecentTail, type TailItem } from './RecentTail';
 
@@ -27,6 +28,7 @@ type Props = {
 };
 
 export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }: Props) {
+  const router = useRouter();
   const [status, setStatus] = useState<'connecting' | 'live' | 'done' | 'error'>(
     initialStatus === 'completed' || initialStatus === 'failed' ? 'done' : 'connecting',
   );
@@ -106,18 +108,20 @@ export function ProgressStream({ scanId, initialStatus, startedAt, onTerminal }:
         case 'scan.completed':
           setStatus('done');
           onTerminal?.('completed');
+          router.refresh();
           es.close();
           break;
         case 'scan.failed':
           setStatus('done');
           onTerminal?.('failed');
+          router.refresh();
           es.close();
           break;
       }
     };
     es.onerror = () => setStatus('error');
     return () => es.close();
-  }, [scanId, initialStatus, onTerminal]);
+  }, [scanId, initialStatus, onTerminal, router]);
 
   if (status === 'done') return null;
 
