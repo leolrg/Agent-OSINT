@@ -85,6 +85,10 @@ jobs:
         env:
           NEXTAUTH_SECRET: local-dev-secret-change-me-32-bytes-min
         run: docker compose up -d --build
+      - name: Seed e2e invite
+        run: |
+          docker compose exec -T postgres psql -U app -d agent_osint \
+            -c "insert into allowed_emails (email, added_by) values ('e2e@example.com', 'ci') on conflict (email) do nothing"
       - name: Wait for web app
         run: |
           for i in {1..60}; do
@@ -97,6 +101,8 @@ jobs:
           exit 1
       - name: Run Playwright smoke
         working-directory: web-next
+        env:
+          E2E_TEST_EMAIL: e2e@example.com
         run: npx playwright test
       - name: Dump compose logs on failure
         if: failure()

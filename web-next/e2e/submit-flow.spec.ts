@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const TEST_EMAIL = `e2e-${Date.now()}@example.com`;
+const TEST_EMAIL = process.env.E2E_TEST_EMAIL ?? `e2e-${Date.now()}@example.com`;
 const TEST_PASSWORD = 'correct-horse-battery-staple';
 
 test('signup → submit small scan → see live feed → see report', async ({ page, request }) => {
