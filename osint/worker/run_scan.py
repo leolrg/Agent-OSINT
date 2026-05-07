@@ -7,9 +7,14 @@ to upload to S3.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import time
 import tempfile
 from pathlib import Path
 from typing import Any
+
+import structlog
 
 from osint.run import scan as run_scan_async
 from osint.types import ScanConfig
@@ -52,6 +57,42 @@ def execute_scan(*, scan_id: str, params: dict[str, Any]) -> dict[str, Any]:
     subject = params.get("subject")
     if not subject:
         raise ValueError("params.subject is required")
+
+    if os.environ.get("OSINT_E2E_MOCK_SCAN") == "1":
+        log = structlog.get_logger("worker.mock_scan").bind(scan_id=scan_id)
+        log.info("scan.pass.start")
+        time.sleep(1)
+        log.info("tool.started", tool_name="web_search", args={"query": subject})
+        time.sleep(10)
+        log.info(
+            "tool.finished",
+            tool_name="web_search",
+            args={"query": subject},
+            result_count=1,
+        )
+        time.sleep(1)
+        log.info("scan.pass.synthesize")
+        time.sleep(1)
+        result = {
+            "scan_id": scan_id,
+            "subject": subject,
+            "report": {
+                "text": f"# E2E Smoke Report\n\nSynthetic result for {subject}.",
+            },
+            "tool_calls": [
+                {
+                    "tool_name": "web_search",
+                    "args": {"query": subject},
+                    "result_count": 1,
+                },
+            ],
+        }
+        return {
+            "result_bytes": json.dumps(result).encode("utf-8"),
+            "total_cost_usd": 0.0,
+            "total_tool_calls": 1,
+        }
+
     config = _build_config(params)
 
     with tempfile.TemporaryDirectory() as tmp:

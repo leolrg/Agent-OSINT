@@ -24,9 +24,11 @@ test('signup → submit small scan → see live feed → see report', async ({ p
   await page.click('button[type=submit]:has-text("RUN SCAN")');
   await expect(page).toHaveURL(/\/scans\/[0-9a-f-]{36}/);
 
-  // 3. The status pill should appear.
-  await expect(page.locator('text=Starting…').or(page.locator('text=ReAct')))
-    .toBeVisible({ timeout: 30_000 });
+  // 3. The live tool-call status should appear.
+  const liveStatus = process.env.E2E_EXPECT_MOCK_TOOL === '1'
+    ? page.locator('text=Web search')
+    : page.locator('text=Starting…').or(page.locator('text=Investigating'));
+  await expect(liveStatus).toBeVisible({ timeout: 30_000 });
 
   // 4. Wait for the scan to terminate (max 5 min).
   await expect(page.locator('text=COMPLETE').or(page.locator('text=FAILED')))

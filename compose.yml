@@ -70,6 +70,7 @@ services:
       LOG_LEVEL: INFO
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
+      OSINT_E2E_MOCK_SCAN: ${OSINT_E2E_MOCK_SCAN:-}
       APIFY_TOKEN: ${APIFY_TOKEN:-}
     depends_on:
       postgres: { condition: service_healthy }

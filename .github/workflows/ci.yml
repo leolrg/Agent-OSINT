@@ -84,6 +84,7 @@ jobs:
       - name: Boot local stack
         env:
           NEXTAUTH_SECRET: local-dev-secret-change-me-32-bytes-min
+          OSINT_E2E_MOCK_SCAN: '1'
         run: docker compose up -d --build
       - name: Seed e2e invite
         run: |
@@ -103,6 +104,7 @@ jobs:
         working-directory: web-next
         env:
           E2E_TEST_EMAIL: e2e@example.com
+          E2E_EXPECT_MOCK_TOOL: '1'
         run: npx playwright test
       - name: Dump compose logs on failure
         if: failure()
