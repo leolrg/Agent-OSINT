@@ -76,16 +76,18 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web-next/package-lock.json
+      - name: Install Playwright dependencies
+        working-directory: web-next
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
       - name: Boot local stack
         env:
           NEXTAUTH_SECRET: local-dev-secret-change-me-32-bytes-min
         run: docker compose up -d --build
       - name: Run Playwright smoke
         working-directory: web-next
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          npx playwright test
+        run: npx playwright test
       - name: Dump compose logs on failure
         if: failure()
         run: docker compose logs --tail=200
