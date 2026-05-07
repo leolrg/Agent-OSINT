@@ -46,6 +46,7 @@ services:
       DATABASE_URL_NODE: postgresql://app:app@postgres:5432/agent_osint
     volumes:
       - ./web-next:/app/web-next
+      - web_node_modules:/app/web-next/node_modules
     command: ["sh", "-c", "npm install --no-audit --no-fund && npx drizzle-kit migrate"]
     depends_on:
       postgres:
@@ -120,6 +121,7 @@ services:
       API_BASE_INTERNAL: http://api-py:8000
     volumes:
       - ./web-next:/app/web-next
+      - web_node_modules:/app/web-next/node_modules
     ports: ["3000:3000"]
     command: ["sh", "-c", "npm install --no-audit --no-fund && npm run dev"]
     depends_on:
@@ -129,3 +131,4 @@ services:
 
 volumes:
   pgdata:
+  web_node_modules:
