@@ -85,6 +85,16 @@ jobs:
         env:
           NEXTAUTH_SECRET: local-dev-secret-change-me-32-bytes-min
         run: docker compose up -d --build
+      - name: Wait for web app
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:3000/auth/signup >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=200
+          exit 1
       - name: Run Playwright smoke
         working-directory: web-next
         run: npx playwright test
