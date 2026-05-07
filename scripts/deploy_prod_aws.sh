@@ -63,13 +63,15 @@ require_cmd() {
 }
 
 require_cmd aws
-require_cmd docker
 require_cmd npm
 require_cmd npx
 require_cmd git
 require_cmd curl
 
-docker info >/dev/null
+if [ "$SKIP_IMAGES" != "1" ]; then
+  require_cmd docker
+  docker info >/dev/null
+fi
 
 AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 AWS_ARN="$(aws sts get-caller-identity --query Arn --output text)"
