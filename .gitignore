@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 venv/
 /scans/
+.DS_Store
+.claude/scheduled_tasks.lock
 
 # Phase 1 deployment additions
 .env*
